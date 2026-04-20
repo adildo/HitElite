@@ -10,6 +10,7 @@ var navGroups = [
       { id: 'appointments', label: 'Appointments', icon: '🎾', href: '/admin/appointments' },
       { id: 'classes', label: 'Classes', icon: '👥', href: '/admin/classes' },
       { id: 'waitlist', label: 'Waitlist', icon: '⏳', href: '/admin/waitlist' },
+      { id: 'checkin', label: 'QR Check-in', icon: '📱', href: '/admin/checkin' },
     ]
   },
   {
@@ -39,6 +40,8 @@ var navGroups = [
       { id: 'courts', label: 'Court costs', icon: '🎾', href: '/admin/courts' },
       { id: 'tags', label: 'Tags', icon: '🏷', href: '/admin/tags' },
       { id: 'tasks', label: 'Tasks', icon: '✅', href: '/admin/tasks' },
+      { id: 'permissions', label: 'Permissions', icon: '🔐', href: '/admin/permissions' },
+      { id: 'plugins', label: 'Website plugins', icon: '🔌', href: '/admin/plugins' },
       { id: 'settings', label: 'Settings', icon: '⚙', href: '/admin/settings' },
     ]
   }
