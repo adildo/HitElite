@@ -27,6 +27,8 @@ var navGroups = [
       { id: 'analytics', label: 'Analytics', icon: '📊', href: '/admin/analytics' },
       { id: 'marketing', label: 'Marketing', icon: '📣', href: '/admin/marketing' },
       { id: 'reviews', label: 'Reviews', icon: '⭐', href: '/admin/reviews' },
+      { id: 'loyalty', label: 'Loyalty & Referrals', icon: '⭐', href: '/admin/loyalty' },
+      { id: 'notifications', label: 'Notifications', icon: '🔔', href: '/admin/notifications' },
     ]
   },
   {
