@@ -34,6 +34,7 @@ var navGroups = [
     items: [
       { id: 'services', label: 'Services', icon: '🔧', href: '/admin/services' },
       { id: 'locations', label: 'Locations', icon: '📍', href: '/admin/locations' },
+      { id: 'courts', label: 'Court costs', icon: '🎾', href: '/admin/courts' },
       { id: 'tags', label: 'Tags', icon: '🏷', href: '/admin/tags' },
       { id: 'tasks', label: 'Tasks', icon: '✅', href: '/admin/tasks' },
       { id: 'settings', label: 'Settings', icon: '⚙', href: '/admin/settings' },
