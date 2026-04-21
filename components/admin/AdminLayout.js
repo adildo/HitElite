@@ -25,6 +25,7 @@ var navGroups = [
     label: 'Business',
     items: [
       { id: 'payments', label: 'Payments', icon: '💳', href: '/admin/payments' },
+      { id: 'bookkeeping', label: 'Bookkeeping', icon: '📒', href: '/admin/bookkeeping' },
       { id: 'analytics', label: 'Analytics', icon: '📊', href: '/admin/analytics' },
       { id: 'marketing', label: 'Marketing', icon: '📣', href: '/admin/marketing' },
       { id: 'reviews', label: 'Reviews', icon: '⭐', href: '/admin/reviews' },
@@ -42,6 +43,7 @@ var navGroups = [
       { id: 'courts', label: 'Court costs', icon: '🎾', href: '/admin/courts' },
       { id: 'tags', label: 'Tags', icon: '🏷', href: '/admin/tags' },
       { id: 'tasks', label: 'Tasks', icon: '✅', href: '/admin/tasks' },
+      { id: 'drills', label: 'Drill library', icon: '🎾', href: '/admin/drills' },
       { id: 'permissions', label: 'Permissions', icon: '🔐', href: '/admin/permissions' },
       { id: 'plugins', label: 'Website plugins', icon: '🔌', href: '/admin/plugins' },
       { id: 'settings', label: 'Settings', icon: '⚙', href: '/admin/settings' },
