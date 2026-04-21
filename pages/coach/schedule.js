@@ -2,291 +2,231 @@ import { useEffect, useState } from 'react'
 import CoachLayout from '../../components/coach/CoachLayout'
 import { supabase } from '../../lib/supabase'
 
-var DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+var DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
 var TIMES = []
-for (var h = 6; h <= 22; h++) {
-  TIMES.push((h < 10 ? '0'+h : ''+h) + ':00')
-  TIMES.push((h < 10 ? '0'+h : ''+h) + ':30')
-}
-var SLOT_DURATIONS = [30, 45, 60, 90, 120]
-
-var DEFAULT_HOURS = {
-  Monday:    { enabled: true,  start: '09:00', end: '17:00' },
-  Tuesday:   { enabled: true,  start: '09:00', end: '17:00' },
-  Wednesday: { enabled: true,  start: '09:00', end: '17:00' },
-  Thursday:  { enabled: true,  start: '09:00', end: '17:00' },
-  Friday:    { enabled: true,  start: '09:00', end: '17:00' },
-  Saturday:  { enabled: false, start: '09:00', end: '13:00' },
-  Sunday:    { enabled: false, start: '09:00', end: '13:00' },
-}
+for (var h=6;h<=21;h++){TIMES.push((h<10?'0'+h:h)+':00');TIMES.push((h<10?'0'+h:h)+':30')}
 
 export default function CoachSchedule() {
-  var [userId, setUserId] = useState(null)
-  var [weeklyHours, setWeeklyHours] = useState(DEFAULT_HOURS)
-  var [slotDuration, setSlotDuration] = useState(60)
-  var [bufferTime, setBufferTime] = useState(0)
-  var [advanceBooking, setAdvanceBooking] = useState(30)
-  var [overrides, setOverrides] = useState([])
-  var [showAddOverride, setShowAddOverride] = useState(false)
-  var [overrideForm, setOverrideForm] = useState({ date:'', type:'unavailable', start:'09:00', end:'17:00', note:'' })
+  var [availability, setAvailability] = useState({
+    weekly_hours: { Monday:{enabled:true,start:'09:00',end:'17:00'}, Tuesday:{enabled:true,start:'09:00',end:'17:00'}, Wednesday:{enabled:true,start:'09:00',end:'17:00'}, Thursday:{enabled:true,start:'09:00',end:'17:00'}, Friday:{enabled:true,start:'09:00',end:'17:00'}, Saturday:{enabled:false,start:'09:00',end:'13:00'}, Sunday:{enabled:false,start:'09:00',end:'13:00'} },
+    slot_duration: 60,
+    buffer_time: 0,
+    advance_days: 30,
+    date_overrides: []
+  })
   var [saving, setSaving] = useState(false)
   var [saved, setSaved] = useState(false)
-  var [loading, setLoading] = useState(true)
+  var [tab, setTab] = useState('hours')
+  var [newOverride, setNewOverride] = useState({ date:'', type:'unavailable', start:'09:00', end:'17:00', note:'' })
+  var [gcalConnected, setGcalConnected] = useState(false)
+  var [gcalEmail, setGcalEmail] = useState('')
 
-  useEffect(function() {
-    async function load() {
+  useEffect(function(){
+    async function load(){
       var s = await supabase.auth.getSession()
       if (!s.data.session) return
-      setUserId(s.data.session.user.id)
-      var result = await supabase.from('staff').select('availability_json').eq('id', s.data.session.user.id).single()
-      if (result.data && result.data.availability_json) {
-        var av = result.data.availability_json
-        if (av.weekly_hours) setWeeklyHours(av.weekly_hours)
-        if (av.slot_duration) setSlotDuration(av.slot_duration)
-        if (av.buffer_time !== undefined) setBufferTime(av.buffer_time)
-        if (av.advance_booking) setAdvanceBooking(av.advance_booking)
-        if (av.overrides) setOverrides(av.overrides)
+      var r = await supabase.from('staff').select('availability_json, calendar_sync_token, calendar_email').eq('id',s.data.session.user.id).maybeSingle()
+      if (r.data) {
+        if (r.data.availability_json) setAvailability(function(p){ return {...p,...r.data.availability_json} })
+        if (r.data.calendar_sync_token) setGcalConnected(true)
+        if (r.data.calendar_email) setGcalEmail(r.data.calendar_email)
       }
-      setLoading(false)
     }
     load()
-  }, [])
+  },[])
 
-  async function saveAvailability() {
+  async function save() {
     setSaving(true)
-    var payload = { weekly_hours: weeklyHours, slot_duration: slotDuration, buffer_time: bufferTime, advance_booking: advanceBooking, overrides: overrides }
-    await supabase.from('staff').update({ availability_json: payload }).eq('id', userId)
+    var s = await supabase.auth.getSession()
+    if (!s.data.session) return
+    await supabase.from('staff').update({ availability_json: availability }).eq('id', s.data.session.user.id)
     setSaving(false); setSaved(true)
-    setTimeout(function(){ setSaved(false) }, 2500)
+    setTimeout(function(){setSaved(false)},2500)
   }
 
   function setDayField(day, field, value) {
-    setWeeklyHours(function(prev) {
-      var next = {}
-      Object.keys(prev).forEach(function(k){ next[k] = prev[k] })
-      next[day] = {}
-      Object.keys(prev[day]).forEach(function(k){ next[day][k] = prev[day][k] })
-      next[day][field] = value
-      return next
+    setAvailability(function(p){
+      var n = {...p, weekly_hours:{...p.weekly_hours}}
+      n.weekly_hours[day] = {...n.weekly_hours[day], [field]:value}
+      return n
     })
   }
 
   function addOverride() {
-    if (!overrideForm.date) return
-    setOverrides(function(prev){ return [...prev, { ...overrideForm, id: Date.now() }] })
-    setOverrideForm({ date:'', type:'unavailable', start:'09:00', end:'17:00', note:'' })
-    setShowAddOverride(false)
+    if (!newOverride.date) return
+    setAvailability(function(p){
+      return {...p, date_overrides:[...(p.date_overrides||[]), {...newOverride, id:Date.now().toString()}]}
+    })
+    setNewOverride({ date:'', type:'unavailable', start:'09:00', end:'17:00', note:'' })
   }
 
   function removeOverride(id) {
-    setOverrides(function(prev){ return prev.filter(function(o){ return o.id !== id }) })
-  }
-
-  function generateSlots(start, end, duration, buffer) {
-    var slots = []
-    var toMins = function(t){ var p=t.split(':'); return parseInt(p[0])*60+parseInt(p[1]) }
-    var startMins = toMins(start); var endMins = toMins(end); var current = startMins
-    while (current + duration <= endMins) {
-      var hh = Math.floor(current/60); var mm = current%60
-      var ampm = hh < 12 ? 'AM' : 'PM'; var h12 = hh%12||12
-      slots.push(h12+':'+(mm===0?'00':mm)+' '+ampm)
-      current += duration + buffer
-    }
-    return slots
+    setAvailability(function(p){
+      return {...p, date_overrides:(p.date_overrides||[]).filter(function(o){return o.id!==id})}
+    })
   }
 
   var btn = { padding:'7px 14px', borderRadius:'8px', fontSize:'13px', cursor:'pointer', border:'0.5px solid rgba(0,0,0,0.2)', background:'transparent', color:'#1a1a1a', fontFamily:'inherit' }
   var btnGold = { ...btn, background:'#D4A843', color:'#0D0D0D', borderColor:'#D4A843', fontWeight:600 }
   var inp = { width:'100%', padding:'8px 12px', borderRadius:'8px', border:'0.5px solid rgba(0,0,0,0.2)', fontSize:'13px', background:'#fff', color:'#1a1a1a', outline:'none' }
-  var sel = { padding:'7px 10px', borderRadius:'8px', border:'0.5px solid rgba(0,0,0,0.2)', fontSize:'13px', background:'#fff', color:'#1a1a1a', fontFamily:'inherit' }
+  var sel = { ...inp, fontFamily:'inherit' }
 
-  var enabledDays = DAYS.filter(function(d){ return weeklyHours[d] && weeklyHours[d].enabled })
-  var previewDay = enabledDays[0]
-  var previewSlots = previewDay ? generateSlots(weeklyHours[previewDay].start, weeklyHours[previewDay].end, slotDuration, bufferTime) : []
-
-  if (loading) return (
-    <CoachLayout active="schedule">
-      <div style={{ padding:'2rem', textAlign:'center', color:'#888', fontSize:'13px' }}>Loading your availability...</div>
-    </CoachLayout>
-  )
+  function tabStyle(t){ return { padding:'9px 18px', fontSize:'13px', cursor:'pointer', border:'none', background:'none', fontFamily:'inherit', borderBottom:tab===t?'2px solid #D4A843':'2px solid transparent', color:tab===t?'#D4A843':'#888', fontWeight:tab===t?600:400, marginBottom:'-1px' } }
 
   return (
     <CoachLayout active="schedule">
-      <div style={{ padding:'1.5rem 2rem', maxWidth:'760px' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'1.5rem' }}>
+      <div style={{ padding:'1.5rem 2rem', maxWidth:'720px' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem' }}>
           <div>
             <div style={{ fontSize:'22px', fontWeight:700 }}>My availability</div>
-            <div style={{ fontSize:'13px', color:'#888', marginTop:'4px' }}>Set your weekly hours and date-specific overrides</div>
+            <div style={{ fontSize:'13px', color:'#888' }}>Set when you're available for bookings</div>
           </div>
-          <button style={btnGold} onClick={saveAvailability} disabled={saving}>
-            {saving ? 'Saving...' : saved ? '✓ Saved!' : 'Save availability'}
-          </button>
+          <button style={btnGold} onClick={save} disabled={saving}>{saving?'Saving...':saved?'✓ Saved!':'Save availability'}</button>
         </div>
 
-        {saved && (
-          <div style={{ background:'#E1F5EE', border:'0.5px solid #5DCAA5', borderRadius:'8px', padding:'10px 16px', fontSize:'13px', color:'#0F6E56', fontWeight:500, marginBottom:'1rem' }}>
-            ✓ Your availability has been saved successfully.
-          </div>
-        )}
+        <div style={{ display:'flex', borderBottom:'0.5px solid rgba(0,0,0,0.1)', marginBottom:'1.25rem' }}>
+          <button style={tabStyle('hours')} onClick={function(){setTab('hours')}}>Weekly hours</button>
+          <button style={tabStyle('overrides')} onClick={function(){setTab('overrides')}}>Date overrides</button>
+          <button style={tabStyle('settings')} onClick={function(){setTab('settings')}}>Settings</button>
+          <button style={tabStyle('calendar')} onClick={function(){setTab('calendar')}}>Google Calendar</button>
+        </div>
 
-        {/* Weekly Hours */}
-        <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1rem' }}>
-          <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'4px' }}>Weekly schedule</div>
-          <div style={{ fontSize:'13px', color:'#888', marginBottom:'1.25rem' }}>Toggle each day on or off and set your working hours</div>
-          <div style={{ display:'grid', gap:'8px' }}>
-            {DAYS.map(function(day) {
-              var h = weeklyHours[day] || { enabled:false, start:'09:00', end:'17:00' }
-              var slots = h.enabled ? generateSlots(h.start, h.end, slotDuration, bufferTime).length : 0
+        {tab === 'hours' && (
+          <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
+            {DAYS.map(function(day, i){
+              var dh = availability.weekly_hours[day]||{ enabled:false, start:'09:00', end:'17:00' }
               return (
-                <div key={day} style={{ display:'flex', alignItems:'center', gap:'14px', padding:'12px 14px', background:h.enabled?'#FFFBF0':'#f9f9f7', borderRadius:'10px', border:'0.5px solid '+(h.enabled?'rgba(212,168,67,0.3)':'rgba(0,0,0,0.06)') }}>
-                  <div onClick={function(){ setDayField(day,'enabled',!h.enabled) }} style={{ width:'38px', height:'21px', borderRadius:'11px', background:h.enabled?'#D4A843':'rgba(0,0,0,0.2)', position:'relative', cursor:'pointer', flexShrink:0, transition:'background .15s' }}>
-                    <div style={{ position:'absolute', width:'17px', height:'17px', borderRadius:'50%', background:'#fff', top:'2px', right:h.enabled?'2px':'19px', transition:'right .15s' }}></div>
+                <div key={day} style={{ display:'flex', alignItems:'center', gap:'14px', padding:'12px 1.25rem', borderBottom:i<6?'0.5px solid rgba(0,0,0,0.05)':'none' }}>
+                  <div style={{ width:'90px', fontSize:'13px', fontWeight:500, color:dh.enabled?'#1a1a1a':'#aaa' }}>{day}</div>
+                  <div onClick={function(){setDayField(day,'enabled',!dh.enabled)}} style={{ width:'36px', height:'20px', borderRadius:'10px', background:dh.enabled?'#D4A843':'rgba(0,0,0,0.15)', position:'relative', cursor:'pointer', flexShrink:0, transition:'background .15s' }}>
+                    <div style={{ position:'absolute', width:'16px', height:'16px', borderRadius:'50%', background:'#fff', top:'2px', right:dh.enabled?'2px':'18px', transition:'right .15s' }}></div>
                   </div>
-                  <div style={{ width:'100px', fontSize:'13px', fontWeight:h.enabled?600:400, color:h.enabled?'#1a1a1a':'#aaa', flexShrink:0 }}>{day}</div>
-                  {h.enabled ? (
-                    <div style={{ display:'flex', alignItems:'center', gap:'10px', flex:1, flexWrap:'wrap' }}>
-                      <select style={sel} value={h.start} onChange={function(e){ setDayField(day,'start',e.target.value) }}>
-                        {TIMES.map(function(t){ return <option key={t} value={t}>{t}</option> })}
+                  {dh.enabled ? (
+                    <div style={{ display:'flex', gap:'8px', alignItems:'center', flex:1 }}>
+                      <select style={{ ...sel, width:'auto' }} value={dh.start} onChange={function(e){setDayField(day,'start',e.target.value)}}>
+                        {TIMES.map(function(t){ return <option key={t}>{t}</option> })}
                       </select>
-                      <span style={{ fontSize:'13px', color:'#888' }}>to</span>
-                      <select style={sel} value={h.end} onChange={function(e){ setDayField(day,'end',e.target.value) }}>
-                        {TIMES.map(function(t){ return <option key={t} value={t}>{t}</option> })}
+                      <span style={{ color:'#888', fontSize:'13px' }}>to</span>
+                      <select style={{ ...sel, width:'auto' }} value={dh.end} onChange={function(e){setDayField(day,'end',e.target.value)}}>
+                        {TIMES.map(function(t){ return <option key={t}>{t}</option> })}
                       </select>
-                      <span style={{ fontSize:'12px', color:'#888', background:'#f1f1f1', padding:'3px 8px', borderRadius:'6px' }}>{slots} slot{slots!==1?'s':''}</span>
                     </div>
                   ) : (
-                    <div style={{ fontSize:'13px', color:'#aaa', flex:1 }}>Unavailable</div>
+                    <span style={{ fontSize:'13px', color:'#aaa' }}>Unavailable</span>
                   )}
                 </div>
               )
             })}
           </div>
-        </div>
+        )}
 
-        {/* Slot Settings */}
-        <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1rem' }}>
-          <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'4px' }}>Booking slot settings</div>
-          <div style={{ fontSize:'13px', color:'#888', marginBottom:'1.25rem' }}>How slots are generated from your available hours</div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'20px' }}>
-            <div>
-              <div style={{ fontSize:'12px', color:'#666', marginBottom:'8px', fontWeight:500 }}>Session duration</div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:'5px' }}>
-                {SLOT_DURATIONS.map(function(d){ var a=slotDuration===d; return <button key={d} onClick={function(){setSlotDuration(d)}} style={{ padding:'5px 10px', borderRadius:'6px', border:'0.5px solid '+(a?'#D4A843':'rgba(0,0,0,0.15)'), background:a?'#F5E6C0':'transparent', fontSize:'12px', cursor:'pointer', fontFamily:'inherit', color:a?'#8B6914':'#666', fontWeight:a?600:400 }}>{d}m</button> })}
+        {tab === 'overrides' && (
+          <div>
+            <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem', marginBottom:'1rem' }}>
+              <div style={{ fontSize:'14px', fontWeight:600, marginBottom:'1rem' }}>Add date override</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom:'10px' }}>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Date</div><input type="date" style={inp} value={newOverride.date} onChange={function(e){setNewOverride(function(p){return{...p,date:e.target.value}})}} /></div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Type</div>
+                  <select style={sel} value={newOverride.type} onChange={function(e){setNewOverride(function(p){return{...p,type:e.target.value}})}}>
+                    <option value="unavailable">Unavailable (day off)</option>
+                    <option value="custom">Custom hours</option>
+                  </select>
+                </div>
+                {newOverride.type === 'custom' && (
+                  <>
+                    <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Start</div><select style={sel} value={newOverride.start} onChange={function(e){setNewOverride(function(p){return{...p,start:e.target.value}})}}>{TIMES.map(function(t){return <option key={t}>{t}</option>})}</select></div>
+                    <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>End</div><select style={sel} value={newOverride.end} onChange={function(e){setNewOverride(function(p){return{...p,end:e.target.value}})}}>{TIMES.map(function(t){return <option key={t}>{t}</option>})}</select></div>
+                  </>
+                )}
+                <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Reason (optional)</div><input type="text" style={inp} value={newOverride.note} onChange={function(e){setNewOverride(function(p){return{...p,note:e.target.value}})}} placeholder="e.g. Vacation, Doctor's appointment..." /></div>
               </div>
+              <button style={btnGold} onClick={addOverride} disabled={!newOverride.date}>+ Add override</button>
             </div>
-            <div>
-              <div style={{ fontSize:'12px', color:'#666', marginBottom:'8px', fontWeight:500 }}>Buffer between sessions</div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:'5px' }}>
-                {[0,10,15,30].map(function(b){ var a=bufferTime===b; return <button key={b} onClick={function(){setBufferTime(b)}} style={{ padding:'5px 10px', borderRadius:'6px', border:'0.5px solid '+(a?'#D4A843':'rgba(0,0,0,0.15)'), background:a?'#F5E6C0':'transparent', fontSize:'12px', cursor:'pointer', fontFamily:'inherit', color:a?'#8B6914':'#666', fontWeight:a?600:400 }}>{b===0?'None':b+'m'}</button> })}
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize:'12px', color:'#666', marginBottom:'8px', fontWeight:500 }}>Advance booking window</div>
-              <div style={{ display:'flex', flexWrap:'wrap', gap:'5px' }}>
-                {[7,14,30,60].map(function(a){ var ac=advanceBooking===a; return <button key={a} onClick={function(){setAdvanceBooking(a)}} style={{ padding:'5px 10px', borderRadius:'6px', border:'0.5px solid '+(ac?'#D4A843':'rgba(0,0,0,0.15)'), background:ac?'#F5E6C0':'transparent', fontSize:'12px', cursor:'pointer', fontFamily:'inherit', color:ac?'#8B6914':'#666', fontWeight:ac?600:400 }}>{a}d</button> })}
-              </div>
-            </div>
-          </div>
-        </div>
 
-        {/* Preview */}
-        {previewDay && (
-          <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1rem' }}>
-            <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'4px' }}>Preview — {previewDay}</div>
-            <div style={{ fontSize:'13px', color:'#888', marginBottom:'1rem' }}>
-              {weeklyHours[previewDay].start} – {weeklyHours[previewDay].end} · {slotDuration}min sessions{bufferTime>0?' · '+bufferTime+'min buffer':''} · {previewSlots.length} slots
-            </div>
-            <div style={{ display:'flex', flexWrap:'wrap', gap:'6px' }}>
-              {previewSlots.map(function(slot,i){ return <span key={i} style={{ display:'inline-block', padding:'5px 12px', borderRadius:'8px', border:'0.5px solid rgba(212,168,67,0.4)', background:'#FFFBF0', fontSize:'12px', color:'#8B6914', fontWeight:500 }}>{slot}</span> })}
-              {previewSlots.length===0 && <span style={{ fontSize:'13px', color:'#aaa' }}>No slots — adjust your hours or duration</span>}
+            <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
+              {(availability.date_overrides||[]).length === 0 && <div style={{ padding:'2rem', textAlign:'center', color:'#999', fontSize:'13px' }}>No date overrides. Add vacation days or special hours above.</div>}
+              {(availability.date_overrides||[]).map(function(o,i){
+                return (
+                  <div key={o.id} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'10px 1.25rem', borderBottom:i<(availability.date_overrides||[]).length-1?'0.5px solid rgba(0,0,0,0.05)':'none' }}>
+                    <div style={{ fontSize:'14px', fontWeight:600 }}>{o.date}</div>
+                    <span style={{ display:'inline-block', padding:'2px 8px', borderRadius:'6px', fontSize:'11px', background:o.type==='unavailable'?'#FCEBEB':'#E1F5EE', color:o.type==='unavailable'?'#A32D2D':'#0F6E56', fontWeight:500 }}>
+                      {o.type==='unavailable'?'Day off':o.start+' – '+o.end}
+                    </span>
+                    {o.note && <div style={{ fontSize:'12px', color:'#888', flex:1 }}>{o.note}</div>}
+                    <button style={{ ...btn, fontSize:'12px', padding:'4px 10px', color:'#A32D2D' }} onClick={function(){removeOverride(o.id)}}>Remove</button>
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
 
-        {/* Date Overrides */}
-        <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'4px' }}>
-            <div style={{ fontSize:'15px', fontWeight:600 }}>Date overrides</div>
-            <button style={btn} onClick={function(){ setShowAddOverride(function(x){ return !x }) }}>+ Add override</button>
+        {tab === 'settings' && (
+          <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem' }}>
+            <div style={{ fontSize:'14px', fontWeight:600, marginBottom:'1.25rem' }}>Booking settings</div>
+            <div style={{ display:'grid', gap:'14px' }}>
+              <div>
+                <div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Appointment slot duration</div>
+                <select style={sel} value={availability.slot_duration} onChange={function(e){setAvailability(function(p){return{...p,slot_duration:parseInt(e.target.value)}})}}>
+                  {[30,45,60,75,90,120].map(function(d){ return <option key={d} value={d}>{d} minutes</option> })}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Buffer between appointments</div>
+                <select style={sel} value={availability.buffer_time} onChange={function(e){setAvailability(function(p){return{...p,buffer_time:parseInt(e.target.value)}})}}>
+                  {[0,5,10,15,30].map(function(d){ return <option key={d} value={d}>{d===0?'None':d+' minutes'}</option> })}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Advance booking window</div>
+                <select style={sel} value={availability.advance_days} onChange={function(e){setAvailability(function(p){return{...p,advance_days:parseInt(e.target.value)}})}}>
+                  {[7,14,30,60,90].map(function(d){ return <option key={d} value={d}>{d} days ahead</option> })}
+                </select>
+              </div>
+            </div>
           </div>
-          <div style={{ fontSize:'13px', color:'#888', marginBottom:'1.25rem' }}>Block specific dates or set different hours for holidays and special days</div>
+        )}
 
-          {showAddOverride && (
-            <div style={{ background:'#f9f9f7', borderRadius:'10px', padding:'1rem', marginBottom:'1rem' }}>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
+        {tab === 'calendar' && (
+          <div style={{ display:'grid', gap:'14px' }}>
+            <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem' }}>
+              <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'4px' }}>Google Calendar sync</div>
+              <div style={{ fontSize:'13px', color:'#888', marginBottom:'1.25rem' }}>Two-way sync — bookings appear in your Google Calendar, and events you add in Google block your availability here.</div>
+              {gcalConnected ? (
                 <div>
-                  <div style={{ fontSize:'12px', color:'#666', marginBottom:'4px', fontWeight:500 }}>Date</div>
-                  <input type="date" style={inp} value={overrideForm.date} onChange={function(e){ setOverrideForm(function(p){ return {...p,date:e.target.value} }) }} />
-                </div>
-                <div>
-                  <div style={{ fontSize:'12px', color:'#666', marginBottom:'4px', fontWeight:500 }}>Type</div>
-                  <select style={inp} value={overrideForm.type} onChange={function(e){ setOverrideForm(function(p){ return {...p,type:e.target.value} }) }}>
-                    <option value="unavailable">Unavailable all day</option>
-                    <option value="custom_hours">Custom hours</option>
-                  </select>
-                </div>
-                {overrideForm.type === 'custom_hours' && (
-                  <>
-                    <div>
-                      <div style={{ fontSize:'12px', color:'#666', marginBottom:'4px', fontWeight:500 }}>Start</div>
-                      <select style={inp} value={overrideForm.start} onChange={function(e){ setOverrideForm(function(p){ return {...p,start:e.target.value} }) }}>
-                        {TIMES.map(function(t){ return <option key={t} value={t}>{t}</option> })}
-                      </select>
-                    </div>
-                    <div>
-                      <div style={{ fontSize:'12px', color:'#666', marginBottom:'4px', fontWeight:500 }}>End</div>
-                      <select style={inp} value={overrideForm.end} onChange={function(e){ setOverrideForm(function(p){ return {...p,end:e.target.value} }) }}>
-                        {TIMES.map(function(t){ return <option key={t} value={t}>{t}</option> })}
-                      </select>
-                    </div>
-                  </>
-                )}
-                <div style={{ gridColumn:'span 2' }}>
-                  <div style={{ fontSize:'12px', color:'#666', marginBottom:'4px', fontWeight:500 }}>Note (optional)</div>
-                  <input type="text" style={inp} placeholder="e.g. Holiday, personal appointment..." value={overrideForm.note} onChange={function(e){ setOverrideForm(function(p){ return {...p,note:e.target.value} }) }} />
-                </div>
-              </div>
-              <div style={{ display:'flex', gap:'8px' }}>
-                <button style={btn} onClick={function(){ setShowAddOverride(false) }}>Cancel</button>
-                <button style={btnGold} onClick={addOverride}>Add override</button>
-              </div>
-            </div>
-          )}
-
-          {overrides.length === 0 && !showAddOverride && (
-            <div style={{ textAlign:'center', padding:'1.5rem', color:'#aaa', fontSize:'13px' }}>
-              No overrides yet. Add one to block a day or set special hours.
-            </div>
-          )}
-
-          <div style={{ display:'grid', gap:'8px' }}>
-            {overrides.sort(function(a,b){ return a.date>b.date?1:-1 }).map(function(o) {
-              var dateLabel = new Date(o.date+'T12:00:00').toLocaleDateString('en-US',{ weekday:'short', month:'short', day:'numeric', year:'numeric' })
-              return (
-                <div key={o.id} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'10px 14px', background:'#f9f9f7', borderRadius:'8px', border:'0.5px solid rgba(0,0,0,0.06)' }}>
-                  <div style={{ fontSize:'16px' }}>{o.type==='unavailable'?'🚫':'⏰'}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:'13px', fontWeight:500 }}>{dateLabel}</div>
-                    <div style={{ fontSize:'12px', color:'#888', marginTop:'2px' }}>
-                      {o.type==='unavailable'?'Unavailable all day':'Custom hours: '+o.start+' – '+o.end}
-                      {o.note?' · '+o.note:''}
-                    </div>
+                  <div style={{ background:'#E1F5EE', border:'0.5px solid #5DCAA5', borderRadius:'8px', padding:'10px 14px', fontSize:'13px', color:'#0F6E56', marginBottom:'12px', display:'flex', gap:'8px', alignItems:'center' }}>
+                    <span>✅</span><span>Connected to <strong>{gcalEmail}</strong></span>
                   </div>
-                  <span style={{ display:'inline-block', padding:'2px 8px', borderRadius:'6px', fontSize:'11px', background:o.type==='unavailable'?'#FCEBEB':'#E1F5EE', color:o.type==='unavailable'?'#A32D2D':'#0F6E56', fontWeight:500 }}>
-                    {o.type==='unavailable'?'Blocked':'Custom'}
-                  </span>
-                  <button onClick={function(){ removeOverride(o.id) }} style={{ ...btn, padding:'4px 10px', fontSize:'12px', color:'#A32D2D' }}>Remove</button>
+                  <button style={{ ...btn, color:'#A32D2D' }} onClick={async function(){
+                    var s = await supabase.auth.getSession()
+                    await supabase.from('staff').update({ calendar_sync_token:null, calendar_email:null }).eq('id',s.data.session.user.id)
+                    setGcalConnected(false); setGcalEmail('')
+                  }}>Disconnect Google Calendar</button>
                 </div>
-              )
-            })}
+              ) : (
+                <div>
+                  <div style={{ background:'#F5E6C0', border:'0.5px solid #D4A843', borderRadius:'8px', padding:'10px 14px', fontSize:'12px', color:'#8B6914', marginBottom:'12px' }}>
+                    To enable Google Calendar sync, add <code style={{ background:'rgba(0,0,0,0.08)', padding:'1px 5px', borderRadius:'3px' }}>GOOGLE_CALENDAR_CLIENT_ID</code> and <code style={{ background:'rgba(0,0,0,0.08)', padding:'1px 5px', borderRadius:'3px' }}>GOOGLE_CALENDAR_CLIENT_SECRET</code> to your Vercel environment variables, then reconnect.
+                  </div>
+                  <button style={btnGold} onClick={function(){ window.location.href='/api/auth/google-calendar' }}>Connect Google Calendar</button>
+                </div>
+              )}
+            </div>
+            <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem' }}>
+              <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'4px' }}>Apple iCloud CalDAV</div>
+              <div style={{ fontSize:'13px', color:'#888', marginBottom:'12px' }}>Sync with Apple Calendar using CalDAV.</div>
+              <div style={{ background:'#f9f9f7', borderRadius:'8px', padding:'12px 14px', fontSize:'12px', color:'#666' }}>
+                <div style={{ fontWeight:600, marginBottom:'6px' }}>To connect Apple Calendar:</div>
+                <ol style={{ paddingLeft:'1.25rem', display:'grid', gap:'4px', lineHeight:1.7 }}>
+                  <li>Open Apple Calendar → Preferences → Accounts → + Add Account</li>
+                  <li>Select <strong>CalDAV</strong></li>
+                  <li>Server: <code style={{ background:'#fff', padding:'1px 5px', borderRadius:'3px', fontSize:'11px' }}>caldav.hitelite.app/dav/{'{your-coach-id}'}</code></li>
+                  <li>Use your Hit Elite email and password</li>
+                </ol>
+              </div>
+            </div>
           </div>
-        </div>
-
-        <div style={{ marginTop:'1.25rem', display:'flex', justifyContent:'flex-end' }}>
-          <button style={{ ...btnGold, padding:'11px 28px', fontSize:'14px' }} onClick={saveAvailability} disabled={saving}>
-            {saving?'Saving...':saved?'✓ Saved!':'Save availability'}
-          </button>
-        </div>
+        )}
       </div>
     </CoachLayout>
   )
