@@ -6,6 +6,7 @@ var navItems = [
   { id:'schedule', label:'My schedule', icon:'📅', href:'/coach/schedule' },
   { id:'appointments', label:'Appointments', icon:'🎾', href:'/coach/appointments' },
   { id:'classes', label:'My classes', icon:'👥', href:'/coach/classes' },
+  { id:'checkin', label:'Check-in students', icon:'✅', href:'/coach/checkin' },
   { id:'feedback', label:'Session feedback', icon:'📝', href:'/coach/feedback' },
   { id:'customers', label:'My students', icon:'👤', href:'/coach/students' },
   { id:'payouts', label:'My payouts', icon:'💰', href:'/coach/payouts' },

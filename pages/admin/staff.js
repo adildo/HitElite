@@ -35,6 +35,10 @@ export default function Staff() {
   // Stats
   var [staffStats, setStaffStats] = useState(null)
   var [statsLoading, setStatsLoading] = useState(false)
+  // Edit profile modal
+  var [editProfileModal, setEditProfileModal] = useState(false)
+  var [editProfileForm, setEditProfileForm] = useState({})
+  var [editSaving, setEditSaving] = useState(false)
 
   useEffect(function(){ loadStaff() }, [])
 
@@ -114,6 +118,64 @@ export default function Staff() {
     loadPayRules(activeStaff.id)
   }
 
+  // Auto-calculate coach pay for a period based on their sessions + pay rules
+  async function autoCalculatePay(staffId, periodStart, periodEnd) {
+    // Get all completed sessions for this coach in the period
+    var [apptR, sessR] = await Promise.all([
+      supabase.from('appointments').select('id,starts_at,total_amount,amount_paid,status').eq('coach_id',staffId).gte('starts_at',periodStart).lte('starts_at',periodEnd).in('status',['confirmed','completed']),
+      supabase.from('class_sessions').select('id,starts_at,enrolled_count,classes(price)').eq('classes.coach_id',staffId).gte('starts_at',periodStart).lte('starts_at',periodEnd).neq('status','cancelled'),
+    ])
+    var appts = apptR.data||[]
+    var classSessions = sessR.data||[]
+    // Get pay rules for this staff
+    var rulesR = await supabase.from('pay_rates').select('*').eq('staff_id',staffId)
+    var rules = rulesR.data||[]
+    // Get default pay rate from staff profile
+    var staffR = await supabase.from('staff').select('default_pay_rate,pay_rate_type').eq('id',staffId).single()
+    var defaultRate = staffR.data?.default_pay_rate||0
+    var defaultType = staffR.data?.pay_rate_type||'per_session'
+
+    var totalPay = 0
+    var sessionCount = appts.length + classSessions.length
+
+    // Calculate appointment pay
+    appts.forEach(function(a){
+      var rule = rules[0] // Use first rule or default
+      var rate = rule ? (rule.rules_json||{}).base_rate||defaultRate : defaultRate
+      var type = rule ? (rule.rules_json||{}).rate_type||defaultType : defaultType
+      var rev = parseFloat(a.amount_paid||a.total_amount||0)
+      if (type==='percentage') totalPay += rev * (((rule?.rules_json||{}).percentage_value||60)/100)
+      else if (type==='hourly') totalPay += rate // assume 1 hr
+      else totalPay += rate
+    })
+
+    // Calculate class session pay
+    classSessions.forEach(function(s){
+      var rule = rules[0]
+      var rate = rule ? (rule.rules_json||{}).base_rate||defaultRate : defaultRate
+      var type = rule ? (rule.rules_json||{}).rate_type||defaultType : defaultType
+      var enrolled = s.enrolled_count||0
+      var pricePerStudent = s.classes?.price||0
+      var rev = enrolled * pricePerStudent
+      if (type==='percentage') totalPay += rev * (((rule?.rules_json||{}).percentage_value||60)/100)
+      else if (type==='per_customer') totalPay += rate * enrolled
+      else totalPay += rate
+    })
+
+    return { totalPay: Math.round(totalPay*100)/100, sessionCount }
+  }
+
+  async function saveEditProfile() {
+    setEditSaving(true)
+    var uid = activeStaff.id
+    await supabase.from('profiles').update({ full_name:editProfileForm.full_name, email:editProfileForm.email, phone:editProfileForm.phone, role:editProfileForm.role }).eq('id',uid)
+    await supabase.from('staff').update({ bio:editProfileForm.bio, default_pay_rate:parseFloat(editProfileForm.default_pay_rate)||0, pay_rate_type:editProfileForm.pay_rate_type, specialties:editProfileForm.specialties }).eq('id',uid)
+    setEditSaving(false); setEditProfileModal(false)
+    await loadStaff()
+    var updated = await supabase.from('profiles').select('*, staff(bio,default_pay_rate,pay_rate_type,show_in_directory,is_active,specialties,availability_json)').eq('id',uid).single()
+    if (updated.data) setActiveStaff(updated.data)
+  }
+
   function setRuleField(k, v) { setRuleForm(function(p){ var n={...p}; n[k]=v; return n }) }
 
   var btn = { padding:'7px 14px', borderRadius:'8px', fontSize:'13px', cursor:'pointer', border:'0.5px solid rgba(0,0,0,0.2)', background:'transparent', color:'#1a1a1a', fontFamily:'inherit' }
@@ -135,6 +197,7 @@ export default function Staff() {
   if (activeStaff) {
     var s = activeStaff
     var staffData = s.staff && s.staff[0] ? s.staff[0] : s.staff || {}
+    var sd = staffData
     var initials = (s.full_name||'?').split(' ').map(function(n){return n[0]}).join('').substring(0,2)
 
     return (
@@ -152,7 +215,10 @@ export default function Staff() {
               </div>
               <div style={{ fontSize:'13px', color:'#888' }}>{s.email}</div>
             </div>
-            <button style={btnGold}>Edit profile</button>
+            <button style={btnGold} onClick={function(){
+              setEditProfileForm({ full_name:s.full_name||'', email:s.email||'', phone:s.phone||'', role:s.role||'coach', bio:(sd&&sd.bio)||'', default_pay_rate:(sd&&sd.default_pay_rate)||'', pay_rate_type:(sd&&sd.pay_rate_type)||'per_session', specialties:(sd&&sd.specialties)||'' })
+              setEditProfileModal(true)
+            }}>Edit profile</button>
           </div>
 
           {/* Tabs */}
@@ -241,8 +307,17 @@ export default function Staff() {
                           return <tr key={po.id} style={{ borderBottom:i<staffStats.payouts.length-1?'0.5px solid rgba(0,0,0,0.05)':'none' }}>
                             <td style={{ padding:'10px 14px', color:'#666', fontSize:'12px' }}>{po.period_start} – {po.period_end}</td>
                             <td style={{ padding:'10px 14px' }}>{po.sessions_count} sessions</td>
-                            <td style={{ padding:'10px 14px', fontWeight:700, color:'#1D9E75' }}>${parseFloat(po.total_payout||0).toFixed(2)}</td>
+                            <td style={{ padding:'10px 14px' }}>
+                              <input type="number" defaultValue={parseFloat(po.total_payout||0).toFixed(2)} style={{ width:'90px', padding:'4px 8px', borderRadius:'6px', border:'0.5px solid rgba(0,0,0,0.2)', fontSize:'13px', fontWeight:700, color:'#1D9E75', outline:'none' }}
+                                onBlur={async function(e){
+                                  var newVal = parseFloat(e.target.value)||0
+                                  await supabase.from('payout_records').update({ total_payout:newVal }).eq('id',po.id)
+                                }} title="Click to edit amount" />
+                            </td>
                             <td style={{ padding:'10px 14px' }}><Badge label={po.status} bg={sc[0]} color={sc[1]} /></td>
+                            <td style={{ padding:'10px 14px' }}>
+                              {po.status==='pending' && <button style={{ ...btn, fontSize:'11px', padding:'3px 8px', background:'#E1F5EE', color:'#0F6E56', borderColor:'#5DCAA5' }} onClick={async function(){ await supabase.from('payout_records').update({status:'paid',paid_at:new Date().toISOString()}).eq('id',po.id); loadStats(activeStaff.id) }}>Mark paid</button>}
+                            </td>
                           </tr>
                         })}
                       </tbody>
@@ -270,7 +345,28 @@ export default function Staff() {
                 <div>Default rate: <strong>${parseFloat(staffData.default_pay_rate||0).toFixed(0)} per {staffData.pay_rate_type||'session'}</strong>. Custom rules below override this per service.</div>
               </div>
 
-              {showNewRule && (
+              {/* Auto-calculate pay card */}
+              <div style={{ background:'#0D0D0D', border:'0.5px solid rgba(212,168,67,0.2)', borderRadius:'12px', padding:'1.25rem', marginBottom:'1.25rem' }}>
+                <div style={{ fontSize:'14px', fontWeight:600, color:'#fff', marginBottom:'4px' }}>Auto-calculate pay</div>
+                <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.4)', marginBottom:'1rem' }}>Calculate pay based on sessions in a period using {s.full_name.split(' ')[0]}'s assigned pay rules</div>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px', marginBottom:'10px' }}>
+                  <div><div style={{ fontSize:'11px', color:'rgba(255,255,255,0.4)', marginBottom:'4px' }}>Period start</div><input type="date" style={{ ...inp, background:'rgba(255,255,255,0.08)', color:'#fff', border:'0.5px solid rgba(255,255,255,0.15)' }} id="calc-start" /></div>
+                  <div><div style={{ fontSize:'11px', color:'rgba(255,255,255,0.4)', marginBottom:'4px' }}>Period end</div><input type="date" style={{ ...inp, background:'rgba(255,255,255,0.08)', color:'#fff', border:'0.5px solid rgba(255,255,255,0.15)' }} id="calc-end" /></div>
+                </div>
+                <button style={btnGold} onClick={async function(){
+                  var start = document.getElementById('calc-start')?.value
+                  var end = document.getElementById('calc-end')?.value
+                  if (!start||!end) return alert('Select a date range first')
+                  var result = await autoCalculatePay(activeStaff.id, start+'T00:00:00.000Z', end+'T23:59:59.999Z')
+                  if (confirm('Auto-calculated pay: $'+result.totalPay+' for '+result.sessionCount+' sessions. Create a payout record?')) {
+                    await supabase.from('payout_records').insert({ staff_id:activeStaff.id, period_start:start, period_end:end, total_payout:result.totalPay, sessions_count:result.sessionCount, status:'pending', notes:'Auto-calculated from pay rules' })
+                    loadStats(activeStaff.id)
+                    alert('Payout record created! You can adjust the amount in Performance → Payout history.')
+                  }
+                }}>🔢 Calculate & create payout</button>
+              </div>
+
+
                 <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1.25rem' }}>
                   <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'1.25rem' }}>New pay rate rule</div>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'1rem' }}>
@@ -344,6 +440,40 @@ export default function Staff() {
             </div>
           )}
         </div>
+
+        {/* EDIT PROFILE MODAL */}
+        {editProfileModal && (
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <div style={{ background:'#fff', borderRadius:'16px', width:'520px', maxHeight:'85vh', overflowY:'auto', padding:'1.5rem' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem' }}>
+                <div style={{ fontSize:'15px', fontWeight:700 }}>Edit profile</div>
+                <button onClick={function(){setEditProfileModal(false)}} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#888' }}>✕</button>
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Full name</div><input type="text" style={inp} value={editProfileForm.full_name||''} onChange={function(e){setEditProfileForm(function(p){return{...p,full_name:e.target.value}})}}/></div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Email</div><input type="email" style={inp} value={editProfileForm.email||''} onChange={function(e){setEditProfileForm(function(p){return{...p,email:e.target.value}})}}/></div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Phone</div><input type="text" style={inp} value={editProfileForm.phone||''} onChange={function(e){setEditProfileForm(function(p){return{...p,phone:e.target.value}})}}/></div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Role</div>
+                  <select style={{ ...inp, fontFamily:'inherit' }} value={editProfileForm.role||'coach'} onChange={function(e){setEditProfileForm(function(p){return{...p,role:e.target.value}})}}>
+                    <option value="coach">Coach</option><option value="staff">Staff</option><option value="manager">Manager</option>
+                  </select>
+                </div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Default pay rate ($)</div><input type="number" style={inp} value={editProfileForm.default_pay_rate||''} onChange={function(e){setEditProfileForm(function(p){return{...p,default_pay_rate:e.target.value}})}}/></div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Pay rate type</div>
+                  <select style={{ ...inp, fontFamily:'inherit' }} value={editProfileForm.pay_rate_type||'per_session'} onChange={function(e){setEditProfileForm(function(p){return{...p,pay_rate_type:e.target.value}})}}>
+                    <option value="per_session">Per session</option><option value="per_hour">Per hour</option><option value="percentage">Percentage of revenue</option>
+                  </select>
+                </div>
+                <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Specialties (comma-separated)</div><input type="text" style={inp} value={editProfileForm.specialties||''} onChange={function(e){setEditProfileForm(function(p){return{...p,specialties:e.target.value}})}}/></div>
+                <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Bio</div><textarea style={{ ...inp, resize:'none', height:'80px' }} value={editProfileForm.bio||''} onChange={function(e){setEditProfileForm(function(p){return{...p,bio:e.target.value}})}}/></div>
+              </div>
+              <div style={{ display:'flex', gap:'8px' }}>
+                <button style={btn} onClick={function(){setEditProfileModal(false)}}>Cancel</button>
+                <button style={btnGold} onClick={saveEditProfile} disabled={editSaving}>{editSaving?'Saving...':'Save changes'}</button>
+              </div>
+            </div>
+          </div>
+        )}
       </AdminLayout>
     )
   }

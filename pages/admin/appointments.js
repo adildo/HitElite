@@ -2,105 +2,128 @@ import { useEffect, useState } from 'react'
 import AdminLayout from '../../components/admin/AdminLayout'
 import { supabase } from '../../lib/supabase'
 
-var DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
-var FREQ_LABELS = { weekly:'Weekly', biweekly:'Every 2 weeks', monthly:'Monthly' }
+var DAYS_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
+var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+var HOURS = [7,8,9,10,11,12,13,14,15,16,17,18,19,20]
 
-function Badge({ type }) {
-  var s = { pending:['#FAEEDA','#854F0B'], confirmed:['#E1F5EE','#0F6E56'], completed:['#F1EFE8','#5F5E5A'], cancelled:['#FCEBEB','#A32D2D'], waiting:['#EEEDFE','#534AB7'], active:['#E1F5EE','#0F6E56'], paused:['#FAEEDA','#854F0B'] }
-  var c = s[type] || s.pending
+function Badge({type}) {
+  var c = {confirmed:['#E1F5EE','#0F6E56'], pending:['#FAEEDA','#854F0B'], cancelled:['#FCEBEB','#A32D2D'], completed:['#EEEDFE','#534AB7']}[type]||['#f1f1f1','#666']
   return <span style={{ display:'inline-block', padding:'2px 9px', borderRadius:'6px', fontSize:'11px', background:c[0], color:c[1], fontWeight:500 }}>{type}</span>
 }
 
 export default function Appointments() {
-  var [tab, setTab] = useState('reservations')
+  var [tab, setTab] = useState('services')
   var [appointments, setAppointments] = useState([])
-  var [waitlist, setWaitlist] = useState([])
-  var [recurring, setRecurring] = useState([])
   var [services, setServices] = useState([])
   var [coaches, setCoaches] = useState([])
   var [customers, setCustomers] = useState([])
   var [loading, setLoading] = useState(true)
-  var [showCancelled, setShowCancelled] = useState(false)
-  var [qf, setQf] = useState('all')
-  // Recurring form
-  var [showNewRecurring, setShowNewRecurring] = useState(false)
-  var [rForm, setRForm] = useState({ customer_id:'', service_id:'', coach_id:'', frequency:'weekly', day_of_week:'1', start_time:'10:00', starts_on:'', ends_on:'', max_occurrences:'', notes:'' })
+  var [calDate, setCalDate] = useState(new Date())
+  var [calView, setCalView] = useState('week')
+  var [selectedAppt, setSelectedAppt] = useState(null)
+  var [showNew, setShowNew] = useState(false)
+  var [selectedService, setSelectedService] = useState(null)
+  var [newForm, setNewForm] = useState({ customer_id:'', coach_id:'', starts_at:'', notes:'', total_amount:'' })
   var [saving, setSaving] = useState(false)
+  var [qf, setQf] = useState('upcoming')
+  var [showCancelled, setShowCancelled] = useState(false)
+  var [editAppt, setEditAppt] = useState(null)
 
-  useEffect(function() { loadAll() }, [])
+  useEffect(function(){
+    loadAll()
+  }, [calDate, calView])
 
   async function loadAll() {
     setLoading(true)
-    var [apptR, wlR, recR, svcR, coachR, custR] = await Promise.all([
-      supabase.from('appointments').select('*, profiles!appointments_customer_id_fkey(full_name,email), services(name,color), locations(name)').order('starts_at',{ascending:false}).limit(50),
-      supabase.from('waitlist').select('*, profiles!waitlist_customer_id_fkey(full_name,email)').eq('status','waiting').order('created_at'),
-      supabase.from('recurring_appointments').select('*, profiles!recurring_appointments_customer_id_fkey(full_name), services(name)').order('created_at',{ascending:false}),
-      supabase.from('services').select('id,name').eq('is_active',true),
-      supabase.from('profiles').select('id,full_name').in('role',['coach']).eq('is_active',true),
-      supabase.from('profiles').select('id,full_name,email').eq('role','customer').eq('is_active',true).order('full_name').limit(200),
+    var start = getCalStart(); var end = getCalEnd()
+    var [apptR, svcR, coachR, custR] = await Promise.all([
+      supabase.from('appointments').select('*, services(name,color,duration_mins), profiles!appointments_customer_id_fkey(full_name,email), profiles!appointments_coach_id_fkey(full_name)').gte('starts_at',start.toISOString()).lte('starts_at',end.toISOString()).order('starts_at'),
+      supabase.from('services').select('*').eq('is_active',true).order('name'),
+      supabase.from('profiles').select('id,full_name').in('role',['coach','staff']).eq('is_active',true),
+      supabase.from('profiles').select('id,full_name,email').eq('role','customer').eq('is_active',true),
     ])
     setAppointments(apptR.data||[])
-    setWaitlist(wlR.data||[])
-    setRecurring(recR.data||[])
     setServices(svcR.data||[])
     setCoaches(coachR.data||[])
     setCustomers(custR.data||[])
     setLoading(false)
   }
 
-  async function updateStatus(id, status) {
-    await supabase.from('appointments').update({status}).eq('id',id)
-    setAppointments(function(prev){ return prev.map(function(a){ return a.id===id?{...a,status}:a }) })
+  function getCalStart() {
+    var d = new Date(calDate)
+    if (calView==='day') { d.setHours(0,0,0,0); return d }
+    if (calView==='week') { d.setDate(d.getDate()-d.getDay()); d.setHours(0,0,0,0); return d }
+    d.setDate(1); d.setHours(0,0,0,0); return d
   }
-
-  async function updateRecurringStatus(id, status) {
-    await supabase.from('recurring_appointments').update({status}).eq('id',id)
-    setRecurring(function(prev){ return prev.map(function(r){ return r.id===id?{...r,status}:r }) })
+  function getCalEnd() {
+    var d = new Date(calDate)
+    if (calView==='day') { d.setHours(23,59,59,999); return d }
+    if (calView==='week') { d.setDate(d.getDate()-d.getDay()+6); d.setHours(23,59,59,999); return d }
+    d.setMonth(d.getMonth()+1,0); d.setHours(23,59,59,999); return d
   }
-
-  async function convertWaitlist(id) {
-    await supabase.from('waitlist').update({status:'converted'}).eq('id',id)
-    setWaitlist(function(prev){ return prev.filter(function(w){ return w.id!==id }) })
+  function getWeekDays() {
+    var s = new Date(calDate); s.setDate(s.getDate()-s.getDay())
+    return Array.from({length:7},function(_,i){var d=new Date(s);d.setDate(d.getDate()+i);return d})
   }
+  function fmt(iso){if(!iso)return '—';var d=new Date(iso);var h=d.getHours();var m=d.getMinutes();return(h%12||12)+':'+(m<10?'0'+m:m)+(h<12?'am':'pm')}
+  function fmtDate(iso){var d=new Date(iso);return DAYS_SHORT[d.getDay()]+' '+MONTHS[d.getMonth()]+' '+d.getDate()}
+  var isToday = function(d){var n=new Date();return d.getDate()===n.getDate()&&d.getMonth()===n.getMonth()&&d.getFullYear()===n.getFullYear()}
 
-  function setRField(k,v){ setRForm(function(p){var n={...p};n[k]=v;return n}) }
-
-  async function saveRecurring() {
-    setSaving(true)
-    await supabase.from('recurring_appointments').insert({
-      customer_id:rForm.customer_id, service_id:rForm.service_id, coach_id:rForm.coach_id||null,
-      frequency:rForm.frequency, day_of_week:parseInt(rForm.day_of_week), start_time:rForm.start_time,
-      starts_on:rForm.starts_on, ends_on:rForm.ends_on||null,
-      max_occurrences:parseInt(rForm.max_occurrences)||null, notes:rForm.notes, status:'active'
+  function apptForHourDay(date, hour) {
+    return appointments.filter(function(a){
+      if (!showCancelled && a.status==='cancelled') return false
+      var d=new Date(a.starts_at); return d.getFullYear()===date.getFullYear()&&d.getMonth()===date.getMonth()&&d.getDate()===date.getDate()&&d.getHours()===hour
     })
-    setSaving(false); setShowNewRecurring(false)
-    setRForm({ customer_id:'', service_id:'', coach_id:'', frequency:'weekly', day_of_week:'1', start_time:'10:00', starts_on:'', ends_on:'', max_occurrences:'', notes:'' })
+  }
+
+  var now = new Date()
+  var filteredAppts = appointments.filter(function(a){
+    if (!showCancelled && a.status==='cancelled') return false
+    if (qf==='upcoming') return new Date(a.starts_at)>=now
+    if (qf==='past') return new Date(a.starts_at)<now
+    if (qf==='pending') return a.status==='pending'
+    if (qf==='confirmed') return a.status==='confirmed'
+    return true
+  })
+
+  async function bookAppointment() {
+    if (!selectedService || !newForm.customer_id || !newForm.starts_at) return
+    setSaving(true)
+    var startDt = new Date(newForm.starts_at)
+    var endDt = new Date(startDt.getTime()+(selectedService.duration_mins||60)*60000)
+    await supabase.from('appointments').insert({
+      customer_id: newForm.customer_id,
+      coach_id: newForm.coach_id||null,
+      service_id: selectedService.id,
+      starts_at: startDt.toISOString(),
+      ends_at: endDt.toISOString(),
+      total_amount: parseFloat(newForm.total_amount||selectedService.price||0),
+      status: 'pending',
+      notes: newForm.notes,
+    })
+    setSaving(false); setShowNew(false); setSelectedService(null)
+    setNewForm({ customer_id:'', coach_id:'', starts_at:'', notes:'', total_amount:'' })
     loadAll()
   }
 
-  var TIMES = []
-  for (var h=6;h<=21;h++){TIMES.push((h<10?'0'+h:h)+':00');TIMES.push((h<10?'0'+h:h)+':30')}
+  async function updateApptStatus(id, status) {
+    await supabase.from('appointments').update({status}).eq('id',id)
+    setAppointments(function(p){return p.map(function(a){return a.id===id?{...a,status}:a})})
+    setSelectedAppt(function(p){return p&&p.id===id?{...p,status}:p})
+  }
+
+  async function saveEditAppt() {
+    await supabase.from('appointments').update({ starts_at:editAppt.starts_at, ends_at:editAppt.ends_at, total_amount:editAppt.total_amount, status:editAppt.status, notes:editAppt.notes }).eq('id',editAppt.id)
+    setEditAppt(null); setSelectedAppt(null); loadAll()
+  }
 
   var btn = { padding:'7px 14px', borderRadius:'8px', fontSize:'13px', cursor:'pointer', border:'0.5px solid rgba(0,0,0,0.2)', background:'transparent', color:'#1a1a1a', fontFamily:'inherit' }
   var btnGold = { ...btn, background:'#D4A843', color:'#0D0D0D', borderColor:'#D4A843', fontWeight:600 }
-  var btnSm = { padding:'5px 10px', fontSize:'12px', borderRadius:'8px', cursor:'pointer', border:'0.5px solid rgba(0,0,0,0.2)', background:'transparent', fontFamily:'inherit', color:'#1a1a1a' }
   var inp = { width:'100%', padding:'8px 12px', borderRadius:'8px', border:'0.5px solid rgba(0,0,0,0.2)', fontSize:'13px', background:'#fff', color:'#1a1a1a', outline:'none' }
   var sel = { padding:'7px 10px', borderRadius:'8px', border:'0.5px solid rgba(0,0,0,0.2)', fontSize:'13px', background:'#fff', color:'#1a1a1a', fontFamily:'inherit' }
+  function tabStyle(t){ return { padding:'9px 18px', fontSize:'13px', cursor:'pointer', border:'none', background:'none', fontFamily:'inherit', borderBottom:tab===t?'2px solid #D4A843':'2px solid transparent', color:tab===t?'#D4A843':'#888', fontWeight:tab===t?600:400, marginBottom:'-1px' } }
 
-  function tabStyle(t) {
-    return { padding:'9px 18px', fontSize:'13px', cursor:'pointer', border:'none', background:'none', fontFamily:'inherit', borderBottom:tab===t?'2px solid #D4A843':'2px solid transparent', color:tab===t?'#D4A843':'#888', fontWeight:tab===t?600:400, marginBottom:'-1px', whiteSpace:'nowrap' }
-  }
-
-  var filteredRes = appointments.filter(function(a) {
-    if (!showCancelled && a.status==='cancelled') return false
-    if (qf==='upcoming') return new Date(a.starts_at)>=new Date()
-    if (qf==='past') return new Date(a.starts_at)<new Date()
-    return true
-  })
-  var pendingReqs = appointments.filter(function(a){ return a.status==='pending' })
-  var confirmedReqs = appointments.filter(function(a){ return a.status==='confirmed' })
-  var declinedReqs = appointments.filter(function(a){ return a.status==='cancelled' })
-  var activeRecurring = recurring.filter(function(r){ return r.status==='active' })
+  var categories = [...new Set(services.map(function(s){return s.category||'Uncategorized'}))]
 
   return (
     <AdminLayout active="appointments">
@@ -108,55 +131,113 @@ export default function Appointments() {
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem' }}>
           <div>
             <div style={{ fontSize:'22px', fontWeight:700 }}>Appointments</div>
-            <div style={{ fontSize:'13px', color:'#888' }}>Manage sessions, requests, recurring schedules</div>
-          </div>
-          <div style={{ display:'flex', gap:'8px' }}>
-            {tab==='recurring' && <button style={btnGold} onClick={function(){setShowNewRecurring(function(x){return !x})}}>+ New recurring</button>}
-            {tab!=='recurring' && <button style={btnGold}>+ New appointment</button>}
+            <div style={{ fontSize:'13px', color:'#888' }}>Book, manage, and view all sessions</div>
           </div>
         </div>
 
         {/* Stats */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(4,minmax(0,1fr))', gap:'12px', marginBottom:'1.25rem' }}>
           {[
-            ['Today\'s sessions', appointments.filter(function(a){return new Date(a.starts_at).toDateString()===new Date().toDateString()}).length, '#D4A843'],
-            ['Upcoming', appointments.filter(function(a){return new Date(a.starts_at)>=new Date()&&a.status!=='cancelled'}).length, '#185FA5'],
-            ['Pending requests', pendingReqs.length, '#BA7517'],
-            ['Recurring schedules', activeRecurring.length, '#534AB7'],
-          ].map(function(m,i){
-            return <div key={i} style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'10px', padding:'12px' }}>
-              <div style={{ fontSize:'11px', color:'#888', marginBottom:'4px', textTransform:'uppercase', letterSpacing:'0.04em' }}>{m[0]}</div>
-              <div style={{ fontSize:'22px', fontWeight:800, color:m[2] }}>{m[1]}</div>
-            </div>
-          })}
+            ['Total', appointments.length, '#185FA5'],
+            ['Pending', appointments.filter(function(a){return a.status==='pending'}).length, '#D4A843'],
+            ['Confirmed', appointments.filter(function(a){return a.status==='confirmed'}).length, '#1D9E75'],
+            ['Cancelled', appointments.filter(function(a){return a.status==='cancelled'}).length, '#A32D2D'],
+          ].map(function(m,i){ return <div key={i} style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'10px', padding:'12px' }}><div style={{ fontSize:'11px', color:'#888', marginBottom:'4px', textTransform:'uppercase', letterSpacing:'0.04em' }}>{m[0]}</div><div style={{ fontSize:'22px', fontWeight:800, color:m[2] }}>{m[1]}</div></div> })}
         </div>
 
-        {/* Tabs */}
         <div style={{ display:'flex', borderBottom:'0.5px solid rgba(0,0,0,0.1)', marginBottom:'1.25rem', overflowX:'auto' }}>
-          {[['reservations','✅ Reservations'],['requests','📋 Requests'],['waitlist','⏳ Waitlist'],['recurring','🔄 Recurring'],['services','🔧 Services']].map(function(t){
-            return <button key={t[0]} style={tabStyle(t[0])} onClick={function(){setTab(t[0])}}>{t[1]}</button>
-          })}
+          <button style={tabStyle('services')} onClick={function(){setTab('services')}}>📋 Services</button>
+          <button style={tabStyle('list')} onClick={function(){setTab('list')}}>List view</button>
+          <button style={tabStyle('calendar')} onClick={function(){setTab('calendar')}}>Calendar</button>
+          <button style={tabStyle('requests')} onClick={function(){setTab('requests')}}>Requests</button>
+          <button style={tabStyle('waitlist')} onClick={function(){setTab('waitlist')}}>Waitlist</button>
+          <button style={tabStyle('recurring')} onClick={function(){setTab('recurring')}}>Recurring</button>
         </div>
 
-        {/* ===== RESERVATIONS ===== */}
-        {tab==='reservations' && (
+        {/* SERVICES TAB — starting point for booking */}
+        {tab==='services' && (
+          <div>
+            {!showNew && <div style={{ background:'#E6F1FB', border:'0.5px solid #85B7EB', borderRadius:'10px', padding:'12px 16px', marginBottom:'1.25rem', fontSize:'13px', color:'#185FA5', display:'flex', gap:'10px', alignItems:'center' }}>
+              <span>💡</span><span>Select a service below to book an appointment. This replaces the old "New Appointment" button — services are the starting point.</span>
+            </div>}
+
+            {showNew && selectedService && (
+              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1.25rem' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'1.25rem' }}>
+                  <button style={{ ...btn, fontSize:'12px', padding:'4px 10px' }} onClick={function(){setShowNew(false);setSelectedService(null)}}>← Back</button>
+                  <div style={{ fontSize:'15px', fontWeight:600 }}>Book: {selectedService.name}</div>
+                  <span style={{ fontSize:'13px', color:'#1D9E75', fontWeight:600 }}>${parseFloat(selectedService.price||0).toFixed(0)}</span>
+                </div>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
+                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Customer *</div>
+                    <select style={{ ...inp, fontFamily:'inherit' }} value={newForm.customer_id} onChange={function(e){setNewForm(function(p){return{...p,customer_id:e.target.value}})}}>
+                      <option value="">Select customer...</option>
+                      {customers.map(function(c){return <option key={c.id} value={c.id}>{c.full_name} ({c.email})</option>})}
+                    </select>
+                  </div>
+                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Coach</div>
+                    <select style={{ ...inp, fontFamily:'inherit' }} value={newForm.coach_id} onChange={function(e){setNewForm(function(p){return{...p,coach_id:e.target.value}})}}>
+                      <option value="">Any coach</option>
+                      {coaches.map(function(c){return <option key={c.id} value={c.id}>{c.full_name}</option>})}
+                    </select>
+                  </div>
+                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Date & time *</div><input type="datetime-local" style={inp} value={newForm.starts_at} onChange={function(e){setNewForm(function(p){return{...p,starts_at:e.target.value}})}}/></div>
+                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Amount ($)</div><input type="number" style={inp} value={newForm.total_amount||selectedService.price} onChange={function(e){setNewForm(function(p){return{...p,total_amount:e.target.value}})}}/></div>
+                  <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Notes</div><textarea style={{ ...inp, resize:'none', height:'60px' }} value={newForm.notes} onChange={function(e){setNewForm(function(p){return{...p,notes:e.target.value}})}}/></div>
+                </div>
+                <div style={{ display:'flex', gap:'8px' }}>
+                  <button style={btn} onClick={function(){setShowNew(false);setSelectedService(null)}}>Cancel</button>
+                  <button style={btnGold} onClick={bookAppointment} disabled={saving||!newForm.customer_id||!newForm.starts_at}>{saving?'Booking...':'Confirm booking'}</button>
+                </div>
+              </div>
+            )}
+
+            {!showNew && categories.map(function(cat){
+              var catSvcs = services.filter(function(s){return (s.category||'Uncategorized')===cat})
+              return (
+                <div key={cat} style={{ marginBottom:'1.25rem' }}>
+                  <div style={{ fontSize:'11px', fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' }}>{cat}</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:'10px' }}>
+                    {catSvcs.map(function(svc){
+                      var modeColor = svc.booking_mode==='request'?['#FAEEDA','#854F0B']:['#E1F5EE','#0F6E56']
+                      return (
+                        <div key={svc.id} onClick={function(){setSelectedService(svc);setShowNew(true);setNewForm({ customer_id:'', coach_id:'', starts_at:'', notes:'', total_amount:svc.price||'' })}}
+                          style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem', cursor:'pointer', display:'flex', gap:'12px', alignItems:'flex-start' }}>
+                          <div style={{ width:'10px', height:'10px', borderRadius:'50%', background:svc.color||'#534AB7', flexShrink:0, marginTop:'4px' }}></div>
+                          <div style={{ flex:1 }}>
+                            <div style={{ fontSize:'14px', fontWeight:600, marginBottom:'5px' }}>{svc.name}</div>
+                            <div style={{ fontSize:'12px', color:'#888', display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'6px' }}>
+                              <span>⏱ {svc.duration_mins}min</span>
+                              <span style={{ color:'#1D9E75', fontWeight:600 }}>${parseFloat(svc.price||0).toFixed(0)}</span>
+                              <span style={{ display:'inline-block', padding:'1px 7px', borderRadius:'5px', fontSize:'11px', background:modeColor[0], color:modeColor[1], fontWeight:500 }}>{svc.booking_mode||'instant'}</span>
+                            </div>
+                            {svc.description&&<div style={{ fontSize:'12px', color:'#aaa' }}>{svc.description.substring(0,80)}{svc.description.length>80?'...':''}</div>}
+                          </div>
+                          <div style={{ fontSize:'18px', color:'#D4A843' }}>→</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+            {services.length===0&&!loading&&<div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'3rem', textAlign:'center', color:'#888' }}>No services. <a href="/admin/services" style={{ color:'#D4A843' }}>Create services →</a></div>}
+          </div>
+        )}
+
+        {/* LIST TAB */}
+        {tab==='list' && (
           <div>
             <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', marginBottom:'1rem' }}>
-              <select style={sel}><option>All coaches</option>{coaches.map(function(c){return <option key={c.id}>{c.full_name}</option>})}</select>
-              <select style={sel}><option>All payments</option><option>Paid</option><option>Unpaid</option></select>
+              {[['all','All'],['upcoming','Upcoming'],['past','Past'],['pending','Pending'],['confirmed','Confirmed']].map(function(f){
+                return <button key={f[0]} onClick={function(){setQf(f[0])}} style={{ padding:'6px 14px', borderRadius:'20px', fontSize:'12px', cursor:'pointer', border:'0.5px solid '+(qf===f[0]?'#D4A843':'rgba(0,0,0,0.15)'), background:qf===f[0]?'#D4A843':'transparent', color:qf===f[0]?'#0D0D0D':'#666', fontFamily:'inherit', fontWeight:qf===f[0]?600:400 }}>{f[1]}</button>
+              })}
               <div style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'12px', color:'#888' }}>
-                Show cancelled
                 <div onClick={function(){setShowCancelled(function(v){return !v})}} style={{ width:'34px', height:'18px', borderRadius:'9px', background:showCancelled?'#D4A843':'rgba(0,0,0,0.2)', position:'relative', cursor:'pointer', transition:'background .15s' }}>
                   <div style={{ position:'absolute', width:'14px', height:'14px', borderRadius:'50%', background:'#fff', top:'2px', right:showCancelled?'2px':'18px', transition:'right .15s' }}></div>
                 </div>
+                Show cancelled
               </div>
-            </div>
-            <div style={{ display:'flex', gap:'6px', marginBottom:'1rem' }}>
-              {['all','upcoming','past'].map(function(f){
-                return <button key={f} onClick={function(){setQf(f)}} style={{ padding:'6px 14px', borderRadius:'20px', fontSize:'12px', cursor:'pointer', border:'0.5px solid '+(qf===f?'#D4A843':'rgba(0,0,0,0.15)'), background:qf===f?'#D4A843':'transparent', color:qf===f?'#0D0D0D':'#666', fontFamily:'inherit', fontWeight:qf===f?600:400 }}>
-                  {f.charAt(0).toUpperCase()+f.slice(1)}
-                </button>
-              })}
             </div>
             <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
               <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
@@ -164,21 +245,19 @@ export default function Appointments() {
                   {['Customer','Service','Date & time','Status','Amount',''].map(function(h,i){return <th key={i} style={{ padding:'10px 14px', textAlign:'left', fontWeight:500, fontSize:'12px', color:'#888', borderBottom:'0.5px solid rgba(0,0,0,0.08)' }}>{h}</th>})}
                 </tr></thead>
                 <tbody>
-                  {loading && <tr><td colSpan="6" style={{ padding:'2rem', textAlign:'center', color:'#999' }}>Loading...</td></tr>}
-                  {!loading && filteredRes.length===0 && <tr><td colSpan="6" style={{ padding:'2rem', textAlign:'center', color:'#999' }}>No appointments found</td></tr>}
-                  {filteredRes.map(function(a,i) {
-                    var cust = a.profiles?a.profiles.full_name:'—'
-                    var svc = a.services?a.services.name:'—'
-                    var date = new Date(a.starts_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})
-                    var time = new Date(a.starts_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})
+                  {loading&&<tr><td colSpan="6" style={{ padding:'2rem', textAlign:'center', color:'#999' }}>Loading...</td></tr>}
+                  {!loading&&filteredAppts.length===0&&<tr><td colSpan="6" style={{ padding:'2rem', textAlign:'center', color:'#999' }}>No appointments found</td></tr>}
+                  {filteredAppts.map(function(a,i){
+                    var cust = a.profiles||{}; var svc = a.services||{}
+                    var date = fmtDate(a.starts_at); var time = fmt(a.starts_at)
                     return (
-                      <tr key={a.id} style={{ opacity:a.status==='cancelled'?0.55:1, borderBottom:i<filteredRes.length-1?'0.5px solid rgba(0,0,0,0.05)':'none' }}>
-                        <td style={{ padding:'10px 14px', fontWeight:500 }}>{cust}</td>
-                        <td style={{ padding:'10px 14px', color:'#666' }}>{svc}</td>
+                      <tr key={a.id} style={{ opacity:a.status==='cancelled'?0.55:1, borderBottom:i<filteredAppts.length-1?'0.5px solid rgba(0,0,0,0.05)':'none', cursor:'pointer' }} onClick={function(){setSelectedAppt(a)}}>
+                        <td style={{ padding:'10px 14px', fontWeight:500 }}>{cust.full_name||'—'}</td>
+                        <td style={{ padding:'10px 14px', color:'#666' }}>{svc.name||'—'}</td>
                         <td style={{ padding:'10px 14px', color:'#666', whiteSpace:'nowrap' }}>{date} · {time}</td>
                         <td style={{ padding:'10px 14px' }}><Badge type={a.status} /></td>
                         <td style={{ padding:'10px 14px', fontWeight:600, color:a.payment_status==='paid'?'#1D9E75':'#BA7517' }}>${parseFloat(a.total_amount||0).toFixed(2)}</td>
-                        <td style={{ padding:'10px 14px' }}><button style={btnSm}>View</button></td>
+                        <td style={{ padding:'10px 14px' }}><button style={{ ...btn, padding:'5px 10px', fontSize:'12px' }} onClick={function(e){e.stopPropagation();setEditAppt({...a})}}>Edit</button></td>
                       </tr>
                     )
                   })}
@@ -188,39 +267,104 @@ export default function Appointments() {
           </div>
         )}
 
-        {/* ===== REQUESTS ===== */}
+        {/* CALENDAR TAB */}
+        {tab==='calendar' && (
+          <div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'10px', padding:'10px 14px', marginBottom:'1rem' }}>
+              <div style={{ display:'flex', gap:'6px' }}>
+                <button style={btn} onClick={function(){var d=new Date(calDate);if(calView==='day')d.setDate(d.getDate()-1);else if(calView==='week')d.setDate(d.getDate()-7);else d.setMonth(d.getMonth()-1);setCalDate(d)}}>‹</button>
+                <button style={btn} onClick={function(){setCalDate(new Date())}}>Today</button>
+                <button style={btn} onClick={function(){var d=new Date(calDate);if(calView==='day')d.setDate(d.getDate()+1);else if(calView==='week')d.setDate(d.getDate()+7);else d.setMonth(d.getMonth()+1);setCalDate(d)}}>›</button>
+              </div>
+              <div style={{ fontSize:'14px', fontWeight:600 }}>
+                {calView==='day'?DAYS_SHORT[calDate.getDay()]+' '+MONTHS[calDate.getMonth()]+' '+calDate.getDate():calView==='week'?(function(){var days=getWeekDays();return MONTHS[days[0].getMonth()]+' '+days[0].getDate()+' – '+days[6].getDate()})():MONTHS[calDate.getMonth()]+' '+calDate.getFullYear()}
+              </div>
+              <div style={{ display:'flex', gap:'4px' }}>
+                {['day','week','month'].map(function(v){return <button key={v} onClick={function(){setCalView(v)}} style={{ ...btn, background:calView===v?'#D4A843':'transparent', color:calView===v?'#0D0D0D':'#666', borderColor:calView===v?'#D4A843':'rgba(0,0,0,0.2)', fontSize:'12px', padding:'5px 12px' }}>{v.charAt(0).toUpperCase()+v.slice(1)}</button>})}
+              </div>
+            </div>
+
+            {/* Week grid */}
+            {calView==='week' && (
+              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'auto' }}>
+                <div style={{ display:'grid', gridTemplateColumns:'56px repeat(7,1fr)', minWidth:'700px' }}>
+                  <div style={{ background:'#f9f9f7', borderBottom:'0.5px solid rgba(0,0,0,0.08)', borderRight:'0.5px solid rgba(0,0,0,0.06)' }}></div>
+                  {getWeekDays().map(function(d,i){
+                    return <div key={i} style={{ padding:'8px 6px', textAlign:'center', borderBottom:'0.5px solid rgba(0,0,0,0.08)', borderRight:'0.5px solid rgba(0,0,0,0.05)', background:'#f9f9f7' }}>
+                      <div style={{ fontSize:'10px', color:'#aaa', textTransform:'uppercase' }}>{DAYS_SHORT[d.getDay()]}</div>
+                      <div style={{ width:'28px', height:'28px', borderRadius:'50%', background:isToday(d)?'#D4A843':'transparent', color:isToday(d)?'#0D0D0D':'#1a1a1a', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'14px', fontWeight:700, margin:'3px auto 0' }}>{d.getDate()}</div>
+                    </div>
+                  })}
+                  {HOURS.map(function(hour){
+                    var weekDays = getWeekDays()
+                    return [
+                      <div key={'h'+hour} style={{ padding:'4px 8px', fontSize:'10px', color:'#ccc', textAlign:'right', background:'#f9f9f7', borderRight:'0.5px solid rgba(0,0,0,0.06)', borderBottom:'0.5px solid rgba(0,0,0,0.04)' }}>{hour>12?hour-12:hour}{hour>=12?'pm':'am'}</div>,
+                      weekDays.map(function(d,i){
+                        var appts = apptForHourDay(d, hour)
+                        return <div key={'c'+i} style={{ padding:'2px 4px', minHeight:'44px', borderBottom:'0.5px solid rgba(0,0,0,0.04)', borderRight:'0.5px solid rgba(0,0,0,0.04)', background:isToday(d)?'rgba(212,168,67,0.01)':'transparent' }}>
+                          {appts.map(function(a){
+                            var svc = a.services||{}; var cust = a.profiles||{}
+                            var col = svc.color||'#534AB7'
+                            return <div key={a.id} onClick={function(){setSelectedAppt(a)}} style={{ background:col+'22', border:'1px solid '+col+'55', borderRadius:'4px', padding:'2px 5px', marginBottom:'2px', cursor:'pointer', fontSize:'10px', fontWeight:600, color:col, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                              {fmt(a.starts_at)} {svc.name} — {cust.full_name}
+                            </div>
+                          })}
+                        </div>
+                      })
+                    ]
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Day grid */}
+            {calView==='day' && (
+              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
+                {HOURS.map(function(hour){
+                  var appts = apptForHourDay(calDate, hour)
+                  var isNow = new Date().getHours()===hour&&isToday(calDate)
+                  return <div key={hour} style={{ display:'grid', gridTemplateColumns:'56px 1fr', borderBottom:'0.5px solid rgba(0,0,0,0.04)' }}>
+                    <div style={{ padding:'8px 10px', fontSize:'11px', color:isNow?'#D4A843':'#ccc', textAlign:'right', background:'#f9f9f7', borderRight:'0.5px solid rgba(0,0,0,0.06)', fontWeight:isNow?700:400 }}>{hour>12?hour-12:hour}{hour>=12?'pm':'am'}</div>
+                    <div style={{ padding:'4px 8px', minHeight:'50px', background:isNow?'rgba(212,168,67,0.02)':'transparent' }}>
+                      {appts.map(function(a){
+                        var svc=a.services||{}; var cust=a.profiles||{}; var col=svc.color||'#534AB7'
+                        return <div key={a.id} onClick={function(){setSelectedAppt(a)}} style={{ background:col+'22', border:'1px solid '+col+'55', borderRadius:'4px', padding:'3px 8px', marginBottom:'3px', cursor:'pointer', fontSize:'11px', fontWeight:600, color:col }}>
+                          {fmt(a.starts_at)} {svc.name||'Appointment'} — {cust.full_name||'—'}
+                        </div>
+                      })}
+                    </div>
+                  </div>
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* REQUESTS TAB */}
         {tab==='requests' && (
-          <div style={{ display:'grid', gap:'1rem' }}>
-            {[['Pending approval', pendingReqs, true],['Approved', confirmedReqs, false],['Declined', declinedReqs, false]].map(function(group) {
-              var label=group[0]; var items=group[1]; var showActions=group[2]
-              var labelColors = { 'Pending approval':['#FAEEDA','#854F0B'], 'Approved':['#E1F5EE','#0F6E56'], 'Declined':['#FCEBEB','#A32D2D'] }
-              var lc = labelColors[label]
+          <div style={{ display:'grid', gap:'12px' }}>
+            {['pending'].map(function(label){
+              var items = appointments.filter(function(a){return a.status===label})
+              var lc = ['#FAEEDA','#854F0B']
               return (
                 <div key={label} style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
                   <div style={{ padding:'10px 1.25rem', borderBottom:'0.5px solid rgba(0,0,0,0.06)', display:'flex', alignItems:'center', gap:'8px', background:'#f9f9f7' }}>
-                    <span style={{ display:'inline-block', padding:'2px 9px', borderRadius:'6px', fontSize:'11px', background:lc[0], color:lc[1], fontWeight:500 }}>{label}</span>
+                    <span style={{ display:'inline-block', padding:'2px 9px', borderRadius:'6px', fontSize:'11px', background:lc[0], color:lc[1], fontWeight:500 }}>Pending requests</span>
                     <span style={{ fontSize:'12px', color:'#888' }}>{items.length}</span>
                   </div>
-                  {items.length===0 && <div style={{ padding:'1.25rem', textAlign:'center', color:'#999', fontSize:'13px' }}>None</div>}
-                  {items.map(function(a,i) {
-                    var cust = a.profiles?a.profiles.full_name:'Unknown'
-                    var svc = a.services?a.services.name:'Service'
-                    var date = new Date(a.starts_at).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})
-                    var time = new Date(a.starts_at).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})
-                    var ini = cust.split(' ').map(function(n){return n[0]}).join('').substring(0,2)
-                    return (
-                      <div key={a.id} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 1.25rem', borderBottom:i<items.length-1?'0.5px solid rgba(0,0,0,0.06)':'none' }}>
-                        <div style={{ width:'30px', height:'30px', borderRadius:'50%', background:'#F5E6C0', color:'#B8922E', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'10px', fontWeight:700, flexShrink:0 }}>{ini}</div>
-                        <div style={{ flex:1 }}>
-                          <div style={{ fontSize:'13px', fontWeight:500 }}>{cust} — {svc}</div>
-                          <div style={{ fontSize:'12px', color:'#888' }}>{date} · {time}</div>
-                        </div>
-                        {showActions && <>
-                          <button style={{ ...btnSm, background:'#E1F5EE', color:'#0F6E56', borderColor:'#5DCAA5' }} onClick={function(){updateStatus(a.id,'confirmed')}}>Approve</button>
-                          <button style={{ ...btnSm, background:'#FCEBEB', color:'#A32D2D', borderColor:'#F09595' }} onClick={function(){updateStatus(a.id,'cancelled')}}>Decline</button>
-                        </>}
+                  {items.length===0&&<div style={{ padding:'1.25rem', textAlign:'center', color:'#999', fontSize:'13px' }}>No pending requests</div>}
+                  {items.map(function(a,i){
+                    var cust=a.profiles||{}; var svc=a.services||{}
+                    var ini=(cust.full_name||'?').split(' ').map(function(n){return n[0]}).join('').substring(0,2)
+                    return <div key={a.id} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 1.25rem', borderBottom:i<items.length-1?'0.5px solid rgba(0,0,0,0.06)':'none' }}>
+                      <div style={{ width:'30px', height:'30px', borderRadius:'50%', background:'#F5E6C0', color:'#B8922E', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'10px', fontWeight:700, flexShrink:0 }}>{ini}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:'13px', fontWeight:500 }}>{cust.full_name||'—'} — {svc.name||'—'}</div>
+                        <div style={{ fontSize:'12px', color:'#888' }}>{fmtDate(a.starts_at)} · {fmt(a.starts_at)}</div>
                       </div>
-                    )
+                      <button style={{ ...btn, background:'#E1F5EE', color:'#0F6E56', borderColor:'#5DCAA5', fontSize:'12px', padding:'5px 12px' }} onClick={function(){updateApptStatus(a.id,'confirmed')}}>Approve</button>
+                      <button style={{ ...btn, background:'#FCEBEB', color:'#A32D2D', borderColor:'#F09595', fontSize:'12px', padding:'5px 12px' }} onClick={function(){updateApptStatus(a.id,'cancelled')}}>Decline</button>
+                    </div>
                   })}
                 </div>
               )
@@ -228,134 +372,52 @@ export default function Appointments() {
           </div>
         )}
 
-        {/* ===== WAITLIST ===== */}
-        {tab==='waitlist' && (
-          <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'0 1.25rem' }}>
-            {waitlist.length===0 && <div style={{ padding:'2rem', textAlign:'center', color:'#999', fontSize:'13px' }}>No one on the waitlist right now.</div>}
-            {waitlist.map(function(w,i) {
-              var cust = w.profiles?w.profiles.full_name:'Unknown'
-              var ini = cust.split(' ').map(function(n){return n[0]}).join('').substring(0,2)
-              return (
-                <div key={w.id} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'12px 0', borderBottom:i<waitlist.length-1?'0.5px solid rgba(0,0,0,0.06)':'none' }}>
-                  <div style={{ width:'24px', height:'24px', borderRadius:'50%', background:'#EEEDFE', color:'#534AB7', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'11px', fontWeight:600, flexShrink:0 }}>#{i+1}</div>
-                  <div style={{ width:'30px', height:'30px', borderRadius:'50%', background:'#F5E6C0', color:'#B8922E', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'10px', fontWeight:700 }}>{ini}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontSize:'13px', fontWeight:500 }}>{cust}</div>
-                    <div style={{ fontSize:'12px', color:'#888' }}>Joined {new Date(w.created_at).toLocaleDateString()}</div>
-                  </div>
-                  <Badge type="waiting" />
-                  <button style={btnSm} onClick={function(){convertWaitlist(w.id)}}>Book now</button>
-                  <button style={{ ...btnSm, color:'#A32D2D' }}>Remove</button>
-                </div>
-              )
-            })}
-          </div>
-        )}
+        {tab==='waitlist'&&<div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'3rem', textAlign:'center', color:'#888', fontSize:'13px' }}>Waitlist managed from <a href="/admin/waitlist" style={{ color:'#D4A843' }}>the Waitlist tab →</a></div>}
+        {tab==='recurring'&&<div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'3rem', textAlign:'center', color:'#888', fontSize:'13px' }}>Recurring appointments managed from <a href="/admin/recurring" style={{ color:'#D4A843' }}>the Recurring tab →</a></div>}
 
-        {/* ===== RECURRING ===== */}
-        {tab==='recurring' && (
-          <div>
-            {showNewRecurring && (
-              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1.25rem' }}>
-                <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'1.25rem' }}>Set up recurring appointment</div>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Customer</div>
-                    <select style={inp} value={rForm.customer_id} onChange={function(e){setRField('customer_id',e.target.value)}}>
-                      <option value="">Select customer...</option>
-                      {customers.map(function(c){return <option key={c.id} value={c.id}>{c.full_name} — {c.email}</option>})}
-                    </select>
-                  </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Service</div>
-                    <select style={inp} value={rForm.service_id} onChange={function(e){setRField('service_id',e.target.value)}}>
-                      <option value="">Select service...</option>
-                      {services.map(function(s){return <option key={s.id} value={s.id}>{s.name}</option>})}
-                    </select>
-                  </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Coach</div>
-                    <select style={inp} value={rForm.coach_id} onChange={function(e){setRField('coach_id',e.target.value)}}>
-                      <option value="">Any available</option>
-                      {coaches.map(function(c){return <option key={c.id} value={c.id}>{c.full_name}</option>})}
-                    </select>
-                  </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Frequency</div>
-                    <select style={inp} value={rForm.frequency} onChange={function(e){setRField('frequency',e.target.value)}}>
-                      <option value="weekly">Weekly</option><option value="biweekly">Every 2 weeks</option><option value="monthly">Monthly</option>
-                    </select>
-                  </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Day of week</div>
-                    <select style={inp} value={rForm.day_of_week} onChange={function(e){setRField('day_of_week',e.target.value)}}>
-                      {DAYS.map(function(d,i){return <option key={i} value={i}>{d}</option>})}
-                    </select>
-                  </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Start time</div>
-                    <select style={inp} value={rForm.start_time} onChange={function(e){setRField('start_time',e.target.value)}}>
-                      {TIMES.map(function(t){return <option key={t} value={t}>{t}</option>})}
-                    </select>
-                  </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Starting from</div>
-                    <input type="date" style={inp} value={rForm.starts_on} onChange={function(e){setRField('starts_on',e.target.value)}} />
-                  </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Ending on (optional)</div>
-                    <input type="date" style={inp} value={rForm.ends_on} onChange={function(e){setRField('ends_on',e.target.value)}} />
-                  </div>
-                </div>
-                <div style={{ background:'#F5E6C0', borderRadius:'8px', padding:'10px 14px', fontSize:'12px', color:'#8B6914', marginBottom:'12px' }}>
-                  ℹ️ This will create a recurring rule. Appointments repeat {rForm.frequency==='biweekly'?'every 2 weeks':rForm.frequency} on {DAYS[parseInt(rForm.day_of_week)]}s at {rForm.start_time}.
-                </div>
-                <div style={{ display:'flex', gap:'8px' }}>
-                  <button style={btn} onClick={function(){setShowNewRecurring(false)}}>Cancel</button>
-                  <button style={btnGold} onClick={saveRecurring} disabled={saving||!rForm.customer_id||!rForm.service_id||!rForm.starts_on}>{saving?'Saving...':'Save schedule'}</button>
+        {/* APPOINTMENT DETAIL MODAL */}
+        {selectedAppt && !editAppt && (
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <div style={{ background:'#fff', borderRadius:'16px', width:'440px', overflow:'hidden' }}>
+              <div style={{ padding:'1.25rem', borderBottom:'0.5px solid rgba(0,0,0,0.08)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <div style={{ fontSize:'15px', fontWeight:700 }}>{selectedAppt.services?selectedAppt.services.name:'Appointment'}</div>
+                <button onClick={function(){setSelectedAppt(null)}} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#888' }}>✕</button>
+              </div>
+              <div style={{ padding:'1.25rem' }}>
+                {[['Customer',(selectedAppt.profiles||{}).full_name||'—'],['Service',(selectedAppt.services||{}).name||'—'],['Date',fmtDate(selectedAppt.starts_at)],['Time',fmt(selectedAppt.starts_at)+' – '+fmt(selectedAppt.ends_at)],['Status',selectedAppt.status],['Amount','$'+parseFloat(selectedAppt.total_amount||0).toFixed(2)]].map(function(row,i){
+                  return <div key={i} style={{ display:'flex', padding:'8px 0', borderBottom:'0.5px solid rgba(0,0,0,0.05)', fontSize:'13px' }}><div style={{ color:'#888', width:'90px', flexShrink:0 }}>{row[0]}</div><div style={{ fontWeight:500 }}>{row[1]}</div></div>
+                })}
+                {selectedAppt.notes&&<div style={{ fontSize:'13px', color:'#666', marginTop:'10px', padding:'10px 12px', background:'#f9f9f7', borderRadius:'8px' }}>{selectedAppt.notes}</div>}
+                <div style={{ display:'flex', gap:'8px', marginTop:'1.25rem', flexWrap:'wrap' }}>
+                  {selectedAppt.status==='pending'&&<button style={{ ...btnGold, fontSize:'12px' }} onClick={function(){updateApptStatus(selectedAppt.id,'confirmed')}}>✓ Confirm</button>}
+                  <button style={{ ...btn, fontSize:'12px' }} onClick={function(){setEditAppt({...selectedAppt})}}>✏️ Edit</button>
+                  {selectedAppt.status!=='cancelled'&&<button style={{ ...btn, fontSize:'12px', color:'#A32D2D' }} onClick={function(){updateApptStatus(selectedAppt.id,'cancelled');setSelectedAppt(null)}}>🚫 Cancel</button>}
                 </div>
               </div>
-            )}
-
-            {!loading && recurring.length===0 && !showNewRecurring && (
-              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'3rem', textAlign:'center' }}>
-                <div style={{ fontSize:'32px', marginBottom:'14px' }}>🔄</div>
-                <div style={{ fontSize:'16px', fontWeight:600, marginBottom:'8px' }}>No recurring appointments</div>
-                <div style={{ fontSize:'13px', color:'#888', marginBottom:'1.25rem' }}>Set up weekly or biweekly standing schedules for regular customers.</div>
-                <button style={btnGold} onClick={function(){setShowNewRecurring(true)}}>+ Set up first recurring schedule</button>
-              </div>
-            )}
-
-            <div style={{ display:'grid', gap:'10px' }}>
-              {recurring.map(function(r) {
-                var cust = r.profiles?r.profiles.full_name:'—'
-                var svc = r.services?r.services.name:'—'
-                return (
-                  <div key={r.id} style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem', display:'flex', alignItems:'center', gap:'14px' }}>
-                    <div style={{ fontSize:'20px' }}>🔄</div>
-                    <div style={{ flex:1 }}>
-                      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'4px' }}>
-                        <div style={{ fontSize:'14px', fontWeight:600 }}>{cust}</div>
-                        <Badge type={r.status} />
-                      </div>
-                      <div style={{ fontSize:'12px', color:'#888', display:'flex', gap:'12px', flexWrap:'wrap' }}>
-                        <span>🎾 {svc}</span>
-                        <span>📅 {FREQ_LABELS[r.frequency]} · {DAYS[r.day_of_week]}s at {r.start_time}</span>
-                        <span>▶ From {r.starts_on}</span>
-                        {r.ends_on && <span>⏹ Until {r.ends_on}</span>}
-                        <span>✓ {r.occurrences_booked||0} booked</span>
-                      </div>
-                    </div>
-                    <div style={{ display:'flex', gap:'6px' }}>
-                      {r.status==='active' && <button style={{ ...btnSm, color:'#BA7517' }} onClick={function(){updateRecurringStatus(r.id,'paused')}}>Pause</button>}
-                      {r.status==='paused' && <button style={{ ...btnSm, color:'#0F6E56' }} onClick={function(){updateRecurringStatus(r.id,'active')}}>Resume</button>}
-                      <button style={{ ...btnSm, color:'#A32D2D' }} onClick={function(){updateRecurringStatus(r.id,'cancelled')}}>Cancel</button>
-                    </div>
-                  </div>
-                )
-              })}
             </div>
           </div>
         )}
 
-        {/* ===== SERVICES ===== */}
-        {tab==='services' && (
-          <div style={{ textAlign:'center', padding:'2rem' }}>
-            <a href="/admin/services" style={{ padding:'11px 24px', background:'#D4A843', color:'#0D0D0D', borderRadius:'8px', fontSize:'13px', fontWeight:600, textDecoration:'none' }}>
-              Manage appointment services →
-            </a>
+        {/* EDIT MODAL */}
+        {editAppt && (
+          <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <div style={{ background:'#fff', borderRadius:'16px', width:'480px', padding:'1.5rem' }}>
+              <div style={{ fontSize:'15px', fontWeight:700, marginBottom:'1.25rem' }}>Edit appointment</div>
+              <div style={{ display:'grid', gap:'12px', marginBottom:'12px' }}>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Start time</div><input type="datetime-local" style={inp} value={editAppt.starts_at?editAppt.starts_at.substring(0,16):''} onChange={function(e){setEditAppt(function(p){return{...p,starts_at:e.target.value+':00.000Z'}})}}/></div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Status</div>
+                  <select style={{ ...inp, fontFamily:'inherit' }} value={editAppt.status} onChange={function(e){setEditAppt(function(p){return{...p,status:e.target.value}})}}>
+                    {['pending','confirmed','completed','cancelled'].map(function(s){return <option key={s}>{s}</option>})}
+                  </select>
+                </div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Amount ($)</div><input type="number" style={inp} value={editAppt.total_amount||''} onChange={function(e){setEditAppt(function(p){return{...p,total_amount:e.target.value}})}}/></div>
+                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Notes</div><textarea style={{ ...inp, resize:'none', height:'60px' }} value={editAppt.notes||''} onChange={function(e){setEditAppt(function(p){return{...p,notes:e.target.value}})}}/></div>
+              </div>
+              <div style={{ display:'flex', gap:'8px' }}>
+                <button style={btn} onClick={function(){setEditAppt(null)}}>Cancel</button>
+                <button style={btnGold} onClick={saveEditAppt}>Save changes</button>
+              </div>
+            </div>
           </div>
         )}
       </div>

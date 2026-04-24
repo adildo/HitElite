@@ -94,6 +94,14 @@ export default function Customers() {
     })
   }
 
+  // Real-time filtering — auto-update preview as filters change
+  useEffect(function() {
+    if (customers.length > 0) {
+      var results = applyFilters(customers, filters)
+      setPreviewCount(results.length)
+    }
+  }, [filters, customers])
+
   function previewSegment() {
     var results = applyFilters(customers, filters)
     setPreviewCount(results.length)
