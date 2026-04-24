@@ -195,7 +195,7 @@ export default function Segments() {
               <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Segment name</div><input type="text" style={inp} value={segmentName} onChange={function(e){setSegmentName(e.target.value)}} placeholder="e.g. Active Adults 30-50" /></div>
               <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Description (optional)</div><input type="text" style={inp} value={segmentDesc} onChange={function(e){setSegmentDesc(e.target.value)}} placeholder="Brief description..." /></div>
             </div>
-            <div style={{ fontSize:'13px', fontWeight:600, marginBottom:'10px' }}>Filters <span style={{ color:'#888', fontWeight:400'}}>(all must match)</span></div>
+            <div style={{ fontSize:'13px', fontWeight:600, marginBottom:'10px' }}>Filters <span style={{ color:'#888', fontWeight:400}}>(all must match)</span></div>
             <div style={{ display:'grid', gap:'8px', marginBottom:'12px' }}>
               {filters.map(function(f,i){
                 var ft = FILTER_TYPES.find(function(t){return t.value===f.field})||FILTER_TYPES[0]
