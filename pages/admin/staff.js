@@ -28,14 +28,11 @@ export default function Staff() {
   var [showNew, setShowNew] = useState(false)
   var [saving, setSaving] = useState(false)
   var [form, setForm] = useState({ full_name:'', email:'', phone:'', role:'coach', bio:'', default_pay_rate:'80', pay_rate_type:'per_session' })
-  // Pay rate rule form
   var [payRules, setPayRules] = useState([])
   var [showNewRule, setShowNewRule] = useState(false)
   var [ruleForm, setRuleForm] = useState({ name:'', base_rate:'', rate_type:'per_session', min_pay:'', max_pay:'', per_customer:false, percentage_split:false, percentage_value:'', count_checkins_only:false, include_late_cancels:false })
-  // Stats
   var [staffStats, setStaffStats] = useState(null)
   var [statsLoading, setStatsLoading] = useState(false)
-  // Edit profile modal
   var [editProfileModal, setEditProfileModal] = useState(false)
   var [editProfileForm, setEditProfileForm] = useState({})
   var [editSaving, setEditSaving] = useState(false)
@@ -118,46 +115,40 @@ export default function Staff() {
     loadPayRules(activeStaff.id)
   }
 
-  // Auto-calculate coach pay for a period based on their sessions + pay rules
   async function autoCalculatePay(staffId, periodStart, periodEnd) {
-    // Get all completed sessions for this coach in the period
     var [apptR, sessR] = await Promise.all([
       supabase.from('appointments').select('id,starts_at,total_amount,amount_paid,status').eq('coach_id',staffId).gte('starts_at',periodStart).lte('starts_at',periodEnd).in('status',['confirmed','completed']),
       supabase.from('class_sessions').select('id,starts_at,enrolled_count,classes(price)').eq('classes.coach_id',staffId).gte('starts_at',periodStart).lte('starts_at',periodEnd).neq('status','cancelled'),
     ])
     var appts = apptR.data||[]
     var classSessions = sessR.data||[]
-    // Get pay rules for this staff
     var rulesR = await supabase.from('pay_rates').select('*').eq('staff_id',staffId)
     var rules = rulesR.data||[]
-    // Get default pay rate from staff profile
     var staffR = await supabase.from('staff').select('default_pay_rate,pay_rate_type').eq('id',staffId).single()
-    var defaultRate = staffR.data?.default_pay_rate||0
-    var defaultType = staffR.data?.pay_rate_type||'per_session'
+    var defaultRate = (staffR.data && staffR.data.default_pay_rate) || 0
+    var defaultType = (staffR.data && staffR.data.pay_rate_type) || 'per_session'
 
     var totalPay = 0
     var sessionCount = appts.length + classSessions.length
 
-    // Calculate appointment pay
     appts.forEach(function(a){
-      var rule = rules[0] // Use first rule or default
+      var rule = rules[0]
       var rate = rule ? (rule.rules_json||{}).base_rate||defaultRate : defaultRate
       var type = rule ? (rule.rules_json||{}).rate_type||defaultType : defaultType
       var rev = parseFloat(a.amount_paid||a.total_amount||0)
-      if (type==='percentage') totalPay += rev * (((rule?.rules_json||{}).percentage_value||60)/100)
-      else if (type==='hourly') totalPay += rate // assume 1 hr
+      if (type==='percentage') totalPay += rev * (((rule && rule.rules_json ? rule.rules_json.percentage_value : 60))/100)
+      else if (type==='hourly') totalPay += rate
       else totalPay += rate
     })
 
-    // Calculate class session pay
     classSessions.forEach(function(s){
       var rule = rules[0]
       var rate = rule ? (rule.rules_json||{}).base_rate||defaultRate : defaultRate
       var type = rule ? (rule.rules_json||{}).rate_type||defaultType : defaultType
       var enrolled = s.enrolled_count||0
-      var pricePerStudent = s.classes?.price||0
+      var pricePerStudent = (s.classes && s.classes.price) || 0
       var rev = enrolled * pricePerStudent
-      if (type==='percentage') totalPay += rev * (((rule?.rules_json||{}).percentage_value||60)/100)
+      if (type==='percentage') totalPay += rev * (((rule && rule.rules_json ? rule.rules_json.percentage_value : 60))/100)
       else if (type==='per_customer') totalPay += rate * enrolled
       else totalPay += rate
     })
@@ -193,7 +184,6 @@ export default function Staff() {
     return <Badge label={role} bg={c[0]} color={c[1]} />
   }
 
-  // ── STAFF DETAIL ──
   if (activeStaff) {
     var s = activeStaff
     var staffData = s.staff && s.staff[0] ? s.staff[0] : s.staff || {}
@@ -205,7 +195,6 @@ export default function Staff() {
         <div style={{ padding:'1.5rem 2rem' }}>
           <button onClick={function(){setActiveStaff(null);setStaffStats(null)}} style={{ ...btn, color:'#D4A843', borderColor:'transparent', paddingLeft:0, marginBottom:'1rem' }}>← Back to staff</button>
 
-          {/* Header */}
           <div style={{ display:'flex', alignItems:'center', gap:'16px', marginBottom:'1.25rem' }}>
             <div style={{ width:'56px', height:'56px', borderRadius:'50%', background:'#0D0D0D', color:'#D4A843', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'20px', fontWeight:700 }}>{initials}</div>
             <div style={{ flex:1 }}>
@@ -221,14 +210,12 @@ export default function Staff() {
             }}>Edit profile</button>
           </div>
 
-          {/* Tabs */}
           <div style={{ display:'flex', borderBottom:'0.5px solid rgba(0,0,0,0.1)', marginBottom:'1.25rem' }}>
             {[['profile','Profile'],['stats','Performance'],['payrates','Pay rates'],['tasks','Tasks']].map(function(t){
               return <button key={t[0]} style={tabStyle(t[0])} onClick={function(){setActiveTab(t[0])}}>{t[1]}</button>
             })}
           </div>
 
-          {/* ── PROFILE TAB ── */}
           {activeTab === 'profile' && (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
               <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem' }}>
@@ -254,13 +241,11 @@ export default function Staff() {
             </div>
           )}
 
-          {/* ── STATS TAB ── */}
           {activeTab === 'stats' && (
             <div>
               {statsLoading && <div style={{ textAlign:'center', color:'#999', fontSize:'13px', padding:'2rem' }}>Loading stats...</div>}
               {!statsLoading && staffStats && (
                 <div>
-                  {/* KPI row */}
                   <div style={{ display:'grid', gridTemplateColumns:'repeat(4,minmax(0,1fr))', gap:'12px', marginBottom:'1.5rem' }}>
                     {[
                       ['Total revenue generated', '$'+staffStats.totalRevenue.toFixed(0), '#1D9E75'],
@@ -275,7 +260,6 @@ export default function Staff() {
                     })}
                   </div>
 
-                  {/* Recent sessions */}
                   <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden', marginBottom:'1.25rem' }}>
                     <div style={{ padding:'1rem 1.25rem', borderBottom:'0.5px solid rgba(0,0,0,0.06)', fontSize:'14px', fontWeight:600 }}>Recent appointments</div>
                     {staffStats.appts.length === 0 && <div style={{ padding:'2rem', textAlign:'center', color:'#999', fontSize:'13px' }}>No appointments yet.</div>}
@@ -296,10 +280,9 @@ export default function Staff() {
                     </table>
                   </div>
 
-                  {/* Payouts */}
                   <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
                     <div style={{ padding:'1rem 1.25rem', borderBottom:'0.5px solid rgba(0,0,0,0.06)', fontSize:'14px', fontWeight:600 }}>Payout history</div>
-                    {staffStats.payouts.length === 0 && <div style={{ padding:'2rem', textAlign:'center', color:'#999', fontSize:'13px' }}>No payout records yet. Generate from <a href="/admin/payments" style={{ color:'#D4A843' }}>Payments → Coach payouts</a>.</div>}
+                    {staffStats.payouts.length === 0 && <div style={{ padding:'2rem', textAlign:'center', color:'#999', fontSize:'13px' }}>No payout records yet.</div>}
                     <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
                       <tbody>
                         {staffStats.payouts.map(function(po,i){
@@ -312,7 +295,7 @@ export default function Staff() {
                                 onBlur={async function(e){
                                   var newVal = parseFloat(e.target.value)||0
                                   await supabase.from('payout_records').update({ total_payout:newVal }).eq('id',po.id)
-                                }} title="Click to edit amount" />
+                                }} />
                             </td>
                             <td style={{ padding:'10px 14px' }}><Badge label={po.status} bg={sc[0]} color={sc[1]} /></td>
                             <td style={{ padding:'10px 14px' }}>
@@ -328,78 +311,33 @@ export default function Staff() {
             </div>
           )}
 
-          {/* ── PAY RATES TAB ── */}
           {activeTab === 'payrates' && (
             <div>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem' }}>
                 <div>
                   <div style={{ fontSize:'15px', fontWeight:600 }}>Pay rate rules</div>
-                  <div style={{ fontSize:'13px', color:'#888', marginTop:'2px' }}>Configure how {s.full_name.split(' ')[0]} is compensated per session</div>
                 </div>
                 <button style={btnGold} onClick={function(){setShowNewRule(function(x){return !x})}}>+ Add rule</button>
               </div>
 
-              {/* Default rate card */}
-              <div style={{ background:'#F5E6C0', border:'0.5px solid #D4A843', borderRadius:'10px', padding:'12px 16px', fontSize:'13px', color:'#8B6914', marginBottom:'1.25rem', display:'flex', alignItems:'center', gap:'10px' }}>
-                <div style={{ fontSize:'18px' }}>💰</div>
-                <div>Default rate: <strong>${parseFloat(staffData.default_pay_rate||0).toFixed(0)} per {staffData.pay_rate_type||'session'}</strong>. Custom rules below override this per service.</div>
-              </div>
-
-              {/* Auto-calculate pay card */}
-              <div style={{ background:'#0D0D0D', border:'0.5px solid rgba(212,168,67,0.2)', borderRadius:'12px', padding:'1.25rem', marginBottom:'1.25rem' }}>
-                <div style={{ fontSize:'14px', fontWeight:600, color:'#fff', marginBottom:'4px' }}>Auto-calculate pay</div>
-                <div style={{ fontSize:'12px', color:'rgba(255,255,255,0.4)', marginBottom:'1rem' }}>Calculate pay based on sessions in a period using {s.full_name.split(' ')[0]}'s assigned pay rules</div>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px', marginBottom:'10px' }}>
-                  <div><div style={{ fontSize:'11px', color:'rgba(255,255,255,0.4)', marginBottom:'4px' }}>Period start</div><input type="date" style={{ ...inp, background:'rgba(255,255,255,0.08)', color:'#fff', border:'0.5px solid rgba(255,255,255,0.15)' }} id="calc-start" /></div>
-                  <div><div style={{ fontSize:'11px', color:'rgba(255,255,255,0.4)', marginBottom:'4px' }}>Period end</div><input type="date" style={{ ...inp, background:'rgba(255,255,255,0.08)', color:'#fff', border:'0.5px solid rgba(255,255,255,0.15)' }} id="calc-end" /></div>
-                </div>
-                <button style={btnGold} onClick={async function(){
-                  var start = document.getElementById('calc-start')?.value
-                  var end = document.getElementById('calc-end')?.value
-                  if (!start||!end) return alert('Select a date range first')
-                  var result = await autoCalculatePay(activeStaff.id, start+'T00:00:00.000Z', end+'T23:59:59.999Z')
-                  if (confirm('Auto-calculated pay: $'+result.totalPay+' for '+result.sessionCount+' sessions. Create a payout record?')) {
-                    await supabase.from('payout_records').insert({ staff_id:activeStaff.id, period_start:start, period_end:end, total_payout:result.totalPay, sessions_count:result.sessionCount, status:'pending', notes:'Auto-calculated from pay rules' })
-                    loadStats(activeStaff.id)
-                    alert('Payout record created! You can adjust the amount in Performance → Payout history.')
-                  }
-                }}>🔢 Calculate & create payout</button>
-              </div>
-
-
+              {showNewRule && (
                 <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1.25rem' }}>
                   <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'1.25rem' }}>New pay rate rule</div>
                   <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'1rem' }}>
-                    <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Rule name</div><input type="text" style={inp} value={ruleForm.name} onChange={function(e){setRuleField('name',e.target.value)}} placeholder="e.g. Peak Season Tennis Rate" /></div>
-                    <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Base rate ($)</div><input type="number" style={inp} value={ruleForm.base_rate} onChange={function(e){setRuleField('base_rate',e.target.value)}} placeholder="80" /></div>
-                    <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Rate type</div>
+                    <div style={{ gridColumn:'span 2' }}><input type="text" style={inp} value={ruleForm.name} onChange={function(e){setRuleField('name',e.target.value)}} placeholder="Rule name" /></div>
+                    <div><input type="number" style={inp} value={ruleForm.base_rate} onChange={function(e){setRuleField('base_rate',e.target.value)}} placeholder="Base rate ($)" /></div>
+                    <div>
                       <select style={sel} value={ruleForm.rate_type} onChange={function(e){setRuleField('rate_type',e.target.value)}}>
                         <option value="per_session">Per session</option>
                         <option value="hourly">Hourly</option>
                         <option value="percentage">% of revenue</option>
                       </select>
                     </div>
-                    <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Minimum pay ($)</div><input type="number" style={inp} value={ruleForm.min_pay} onChange={function(e){setRuleField('min_pay',e.target.value)}} placeholder="Leave blank for none" /></div>
-                    <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Maximum pay cap ($)</div><input type="number" style={inp} value={ruleForm.max_pay} onChange={function(e){setRuleField('max_pay',e.target.value)}} placeholder="Leave blank for none" /></div>
-                    {ruleForm.rate_type === 'percentage' && (
-                      <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Percentage (%)</div><input type="number" style={inp} value={ruleForm.percentage_value} onChange={function(e){setRuleField('percentage_value',e.target.value)}} placeholder="e.g. 60" /></div>
-                    )}
-                  </div>
-                  <div style={{ borderTop:'0.5px solid rgba(0,0,0,0.08)', paddingTop:'1rem', marginBottom:'1rem' }}>
-                    <Toggle on={ruleForm.per_customer} onToggle={function(){setRuleField('per_customer',!ruleForm.per_customer)}} label="Per-customer mode" sub="Pay calculated per attending customer (for group sessions)" />
-                    <Toggle on={ruleForm.count_checkins_only} onToggle={function(){setRuleField('count_checkins_only',!ruleForm.count_checkins_only)}} label="Count checked-in customers only" sub="Excludes no-shows from pay calculation" />
-                    <Toggle on={ruleForm.include_late_cancels} onToggle={function(){setRuleField('include_late_cancels',!ruleForm.include_late_cancels)}} label="Include late cancellations in count" sub="Late cancels still count toward attendance for pay purposes" />
                   </div>
                   <div style={{ display:'flex', gap:'8px' }}>
                     <button style={btn} onClick={function(){setShowNewRule(false)}}>Cancel</button>
-                    <button style={btnGold} onClick={savePayRule} disabled={saving||!ruleForm.name}>{saving?'Saving...':'Save rule'}</button>
+                    <button style={btnGold} onClick={savePayRule} disabled={saving||!ruleForm.name}>Save</button>
                   </div>
-                </div>
-              )}
-
-              {payRules.length === 0 && !showNewRule && (
-                <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'2rem', textAlign:'center', color:'#888', fontSize:'13px' }}>
-                  No custom rules yet. The default rate applies to all sessions. Add a rule to override for specific situations.
                 </div>
               )}
 
@@ -407,69 +345,28 @@ export default function Staff() {
                 {payRules.map(function(rule){
                   var r = rule.rules_json || {}
                   return (
-                    <div key={rule.id} style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem', display:'flex', gap:'14px', alignItems:'flex-start' }}>
-                      <div style={{ fontSize:'20px' }}>💰</div>
-                      <div style={{ flex:1 }}>
-                        <div style={{ fontSize:'14px', fontWeight:600, marginBottom:'6px' }}>{rule.name}</div>
-                        <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', fontSize:'12px' }}>
-                          <span style={{ background:'#F5E6C0', color:'#8B6914', padding:'2px 8px', borderRadius:'6px', fontWeight:500 }}>${r.base_rate} / {r.rate_type}</span>
-                          {r.min_pay && <span style={{ background:'#E6F1FB', color:'#185FA5', padding:'2px 8px', borderRadius:'6px' }}>Min ${r.min_pay}</span>}
-                          {r.max_pay && <span style={{ background:'#EEEDFE', color:'#534AB7', padding:'2px 8px', borderRadius:'6px' }}>Max ${r.max_pay}</span>}
-                          {r.per_customer && <span style={{ background:'#E1F5EE', color:'#0F6E56', padding:'2px 8px', borderRadius:'6px' }}>Per customer</span>}
-                          {r.count_checkins_only && <span style={{ background:'#f1f1f1', color:'#666', padding:'2px 8px', borderRadius:'6px' }}>Checked-in only</span>}
-                        </div>
+                    <div key={rule.id} style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem', display:'flex', justifyContent:'space-between' }}>
+                      <div>
+                        <div style={{ fontWeight:600 }}>{rule.name}</div>
+                        <div style={{ fontSize:'12px', color:'#888' }}>${r.base_rate} / {r.rate_type}</div>
                       </div>
-                      <button style={{ ...btn, fontSize:'12px', padding:'4px 10px', color:'#A32D2D' }} onClick={function(){deletePayRule(rule.id)}}>Delete</button>
+                      <button style={{ ...btn, color:'#A32D2D' }} onClick={function(){deletePayRule(rule.id)}}>Delete</button>
                     </div>
                   )
                 })}
               </div>
             </div>
           )}
-
-          {/* ── TASKS TAB ── */}
-          {activeTab === 'tasks' && (
-            <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1rem' }}>
-                <div style={{ fontSize:'14px', fontWeight:600 }}>Assigned tasks</div>
-                <a href="/admin/tasks" style={{ fontSize:'12px', color:'#D4A843', fontWeight:600 }}>Manage all tasks →</a>
-              </div>
-              <div style={{ textAlign:'center', color:'#999', fontSize:'13px', padding:'1.5rem' }}>
-                Tasks assigned to {s.full_name.split(' ')[0]} appear here. <a href="/admin/tasks" style={{ color:'#D4A843' }}>Go to Tasks to assign one.</a>
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* EDIT PROFILE MODAL */}
         {editProfileModal && (
           <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center' }}>
-            <div style={{ background:'#fff', borderRadius:'16px', width:'520px', maxHeight:'85vh', overflowY:'auto', padding:'1.5rem' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem' }}>
-                <div style={{ fontSize:'15px', fontWeight:700 }}>Edit profile</div>
-                <button onClick={function(){setEditProfileModal(false)}} style={{ background:'none', border:'none', cursor:'pointer', fontSize:'20px', color:'#888' }}>✕</button>
-              </div>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
-                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Full name</div><input type="text" style={inp} value={editProfileForm.full_name||''} onChange={function(e){setEditProfileForm(function(p){return{...p,full_name:e.target.value}})}}/></div>
-                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Email</div><input type="email" style={inp} value={editProfileForm.email||''} onChange={function(e){setEditProfileForm(function(p){return{...p,email:e.target.value}})}}/></div>
-                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Phone</div><input type="text" style={inp} value={editProfileForm.phone||''} onChange={function(e){setEditProfileForm(function(p){return{...p,phone:e.target.value}})}}/></div>
-                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Role</div>
-                  <select style={{ ...inp, fontFamily:'inherit' }} value={editProfileForm.role||'coach'} onChange={function(e){setEditProfileForm(function(p){return{...p,role:e.target.value}})}}>
-                    <option value="coach">Coach</option><option value="staff">Staff</option><option value="manager">Manager</option>
-                  </select>
-                </div>
-                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Default pay rate ($)</div><input type="number" style={inp} value={editProfileForm.default_pay_rate||''} onChange={function(e){setEditProfileForm(function(p){return{...p,default_pay_rate:e.target.value}})}}/></div>
-                <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Pay rate type</div>
-                  <select style={{ ...inp, fontFamily:'inherit' }} value={editProfileForm.pay_rate_type||'per_session'} onChange={function(e){setEditProfileForm(function(p){return{...p,pay_rate_type:e.target.value}})}}>
-                    <option value="per_session">Per session</option><option value="per_hour">Per hour</option><option value="percentage">Percentage of revenue</option>
-                  </select>
-                </div>
-                <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Specialties (comma-separated)</div><input type="text" style={inp} value={editProfileForm.specialties||''} onChange={function(e){setEditProfileForm(function(p){return{...p,specialties:e.target.value}})}}/></div>
-                <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Bio</div><textarea style={{ ...inp, resize:'none', height:'80px' }} value={editProfileForm.bio||''} onChange={function(e){setEditProfileForm(function(p){return{...p,bio:e.target.value}})}}/></div>
-              </div>
-              <div style={{ display:'flex', gap:'8px' }}>
+            <div style={{ background:'#fff', borderRadius:'16px', width:'520px', padding:'1.5rem' }}>
+              <h3>Edit Profile</h3>
+              <input style={inp} value={editProfileForm.full_name} onChange={function(e){ var f={...editProfileForm}; f.full_name=e.target.value; setEditProfileForm(f); }} />
+              <div style={{ display:'flex', gap:'10px', marginTop:'1rem' }}>
                 <button style={btn} onClick={function(){setEditProfileModal(false)}}>Cancel</button>
-                <button style={btnGold} onClick={saveEditProfile} disabled={editSaving}>{editSaving?'Saving...':'Save changes'}</button>
+                <button style={btnGold} onClick={saveEditProfile}>{editSaving?'Saving...':'Save Changes'}</button>
               </div>
             </div>
           </div>
@@ -478,76 +375,25 @@ export default function Staff() {
     )
   }
 
-  // ── STAFF LIST ──
+  // ── STAFF LIST VIEW ──
   return (
     <AdminLayout active="staff">
-      <div style={{ padding:'1.5rem 2rem' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'1.25rem' }}>
-          <div>
-            <div style={{ fontSize:'22px', fontWeight:700 }}>Staff & Coaches</div>
-            <div style={{ fontSize:'13px', color:'#888' }}>{staffList.length} active members</div>
-          </div>
-          <button style={btnGold} onClick={function(){setShowNew(function(x){return !x})}}>+ Add staff</button>
+      <div style={{ padding:'2rem' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'2rem' }}>
+          <h2>Staff Management</h2>
+          <button style={btnGold} onClick={function(){setShowNew(true)}}>+ Add Staff</button>
         </div>
-
-        {showNew && (
-          <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1.25rem' }}>
-            <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'1.25rem' }}>Add new staff member</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
-              {[['Full name','text','full_name','Coach Maria'],['Email','email','email','maria@hitelite.com'],['Phone','tel','phone','(555) 000-0000']].map(function(f){
-                return <div key={f[2]}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>{f[0]}</div><input type={f[1]} style={inp} placeholder={f[3]} value={form[f[2]]} onChange={function(e){setForm(function(p){var n={...p};n[f[2]]=e.target.value;return n})}} /></div>
-              })}
-              <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Role</div>
-                <select style={sel} value={form.role} onChange={function(e){setForm(function(p){return{...p,role:e.target.value}})}}><option value="coach">Coach</option><option value="staff">Staff</option><option value="manager">Manager</option></select>
-              </div>
-              <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Default pay rate ($)</div><input type="number" style={inp} placeholder="80" value={form.default_pay_rate} onChange={function(e){setForm(function(p){return{...p,default_pay_rate:e.target.value}})}} /></div>
-              <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Pay rate type</div>
-                <select style={sel} value={form.pay_rate_type} onChange={function(e){setForm(function(p){return{...p,pay_rate_type:e.target.value}})}}><option value="per_session">Per session</option><option value="hourly">Hourly</option><option value="percentage">% of revenue</option></select>
-              </div>
-              <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Bio</div><textarea style={{ ...inp, resize:'none', height:'70px' }} placeholder="Coach specialties, experience..." value={form.bio} onChange={function(e){setForm(function(p){return{...p,bio:e.target.value}})}} /></div>
-            </div>
-            <div style={{ background:'#F5E6C0', borderRadius:'8px', padding:'10px 14px', fontSize:'12px', color:'#8B6914', marginBottom:'12px' }}>
-              ℹ️ After saving, invite this person to log in via Supabase Auth → Users → Invite user with the same email.
-            </div>
-            <div style={{ display:'flex', gap:'8px' }}>
-              <button style={btn} onClick={function(){setShowNew(false)}}>Cancel</button>
-              <button style={btnGold} onClick={saveStaff} disabled={saving}>{saving?'Saving...':'Save staff member'}</button>
-            </div>
+        {loading ? <p>Loading...</p> : (
+          <div style={{ display:'grid', gap:'10px' }}>
+            {staffList.map(function(member){
+              return (
+                <div key={member.id} onClick={function(){openStaff(member)}} style={{ background:'#fff', padding:'1rem', borderRadius:'12px', cursor:'pointer', border:'0.5px solid #eee' }}>
+                  <strong>{member.full_name}</strong> - {member.role}
+                </div>
+              )
+            })}
           </div>
         )}
-
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:'14px' }}>
-          {loading && <div style={{ gridColumn:'span 4', padding:'3rem', textAlign:'center', color:'#999', fontSize:'13px' }}>Loading staff...</div>}
-          {!loading && staffList.length === 0 && (
-            <div style={{ gridColumn:'span 4', background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'3rem', textAlign:'center' }}>
-              <div style={{ fontSize:'32px', marginBottom:'12px' }}>🏆</div>
-              <div style={{ fontWeight:600, marginBottom:'6px' }}>No staff yet</div>
-              <button style={btnGold} onClick={function(){setShowNew(true)}}>+ Add first staff member</button>
-            </div>
-          )}
-          {staffList.map(function(member){
-            var sd = member.staff&&member.staff[0]?member.staff[0]:{}
-            var ini = (member.full_name||'?').split(' ').map(function(n){return n[0]}).join('').substring(0,2)
-            var payRate = sd.default_pay_rate?'$'+parseFloat(sd.default_pay_rate).toFixed(0)+'/'+sd.pay_rate_type:'—'
-            return (
-              <div key={member.id} onClick={function(){openStaff(member)}} style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem', cursor:'pointer' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'12px' }}>
-                  <div style={{ width:'44px', height:'44px', borderRadius:'50%', background:'#0D0D0D', color:'#D4A843', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'15px', fontWeight:700, flexShrink:0 }}>{ini}</div>
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:'14px', fontWeight:600, marginBottom:'4px' }}>{member.full_name}</div>
-                    {roleBadge(member.role)}
-                  </div>
-                </div>
-                <div style={{ fontSize:'12px', color:'#888', display:'grid', gap:'4px' }}>
-                  <div>✉ {member.email}</div>
-                  {member.phone && <div>📱 {member.phone}</div>}
-                  <div>💳 {payRate}</div>
-                  {sd.bio && <div style={{ marginTop:'4px', fontSize:'12px', color:'#666', overflow:'hidden', textOverflow:'ellipsis', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical' }}>{sd.bio}</div>}
-                </div>
-              </div>
-            )
-          })}
-        </div>
       </div>
     </AdminLayout>
   )
