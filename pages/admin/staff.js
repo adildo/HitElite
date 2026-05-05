@@ -330,7 +330,7 @@ export default function Staff() {
                       <select style={sel} value={ruleForm.rate_type} onChange={function(e){setRuleField('rate_type',e.target.value)}}>
                         <option value="per_session">Per session</option>
                         <option value="hourly">Hourly</option>
-                        <option value="percentage">% of revenue</option>
+                        <option value="percentage">{'%'} of revenue</option>
                       </select>
                     </div>
                   </div>
