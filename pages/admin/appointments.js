@@ -29,6 +29,17 @@ export default function Appointments() {
   var [showCancelled, setShowCancelled] = useState(false)
   var [editAppt, setEditAppt] = useState(null)
 
+  // Service management state
+  var [svcInnerTab, setSvcInnerTab] = useState('services')
+  var [categories, setCategories] = useState([])
+  var [addons, setAddons] = useState([])
+  var [showCreateSvc, setShowCreateSvc] = useState(false)
+  var [svcSearch, setSvcSearch] = useState('')
+  var [newSvc, setNewSvc] = useState({ name:'', description:'', category_id:'', duration_mins:60, price:'', payment_mode:'full', visibility:'public', booking_mode:'instant' })
+  var [newCat, setNewCat] = useState('')
+  var [newAddon, setNewAddon] = useState({ name:'', price:'', duration_added_mins:0, max_qty:1 })
+  var [svcSaving, setSvcSaving] = useState(false)
+
   useEffect(function(){
     loadAll()
   }, [calDate, calView])
@@ -36,16 +47,20 @@ export default function Appointments() {
   async function loadAll() {
     setLoading(true)
     var start = getCalStart(); var end = getCalEnd()
-    var [apptR, svcR, coachR, custR] = await Promise.all([
+    var [apptR, svcR, coachR, custR, catR, addonR] = await Promise.all([
       supabase.from('appointments').select('*, services(name,color,duration_mins), profiles!appointments_customer_id_fkey(full_name,email), profiles!appointments_coach_id_fkey(full_name)').gte('starts_at',start.toISOString()).lte('starts_at',end.toISOString()).order('starts_at'),
       supabase.from('services').select('*').eq('is_active',true).order('name'),
       supabase.from('profiles').select('id,full_name').in('role',['coach','staff']).eq('is_active',true),
       supabase.from('profiles').select('id,full_name,email').eq('role','customer').eq('is_active',true),
+      supabase.from('service_categories').select('*').order('display_order'),
+      supabase.from('addons').select('*').eq('is_active',true).order('name'),
     ])
     setAppointments(apptR.data||[])
     setServices(svcR.data||[])
     setCoaches(coachR.data||[])
     setCustomers(custR.data||[])
+    setCategories(catR.data||[])
+    setAddons(addonR.data||[])
     setLoading(false)
   }
 
@@ -157,71 +172,233 @@ export default function Appointments() {
         {/* SERVICES TAB — starting point for booking */}
         {tab==='services' && (
           <div>
-            {!showNew && <div style={{ background:'#E6F1FB', border:'0.5px solid #85B7EB', borderRadius:'10px', padding:'12px 16px', marginBottom:'1.25rem', fontSize:'13px', color:'#185FA5', display:'flex', gap:'10px', alignItems:'center' }}>
-              <span>💡</span><span>Select a service below to book an appointment. This replaces the old "New Appointment" button — services are the starting point.</span>
-            </div>}
+            {/* Inner tabs: manage vs book */}
+            <div style={{ display:'flex', gap:'2px', background:'#fff', border:'0.5px solid rgba(0,0,0,0.1)', borderRadius:'12px', padding:'5px', marginBottom:'1.25rem', width:'fit-content' }}>
+              {[['book','📅 Book appointment'],['services','🔧 Manage services'],['categories','🗂 Categories'],['addons','➕ Add-ons']].map(function(t){
+                var active = svcInnerTab===t[0]
+                return <button key={t[0]} onClick={function(){setSvcInnerTab(t[0]);setShowCreateSvc(false)}} style={{ padding:'7px 16px', borderRadius:'8px', fontSize:'13px', cursor:'pointer', border:'none', background:active?'#EEEDFE':'transparent', color:active?'#534AB7':'#666', fontWeight:active?600:400, fontFamily:'inherit' }}>{t[1]}</button>
+              })}
+              {svcInnerTab!=='book' && <button onClick={function(){setShowCreateSvc(function(x){return !x})}} style={{ padding:'7px 16px', borderRadius:'8px', fontSize:'13px', cursor:'pointer', border:'none', background:'#534AB7', color:'#fff', fontWeight:600, fontFamily:'inherit', marginLeft:'4px' }}>+ {svcInnerTab==='services'?'Add service':svcInnerTab==='categories'?'Add category':'Add add-on'}</button>}
+            </div>
 
-            {showNew && selectedService && (
-              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1.25rem' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'1.25rem' }}>
-                  <button style={{ ...btn, fontSize:'12px', padding:'4px 10px' }} onClick={function(){setShowNew(false);setSelectedService(null)}}>← Back</button>
-                  <div style={{ fontSize:'15px', fontWeight:600 }}>Book: {selectedService.name}</div>
-                  <span style={{ fontSize:'13px', color:'#1D9E75', fontWeight:600 }}>${parseFloat(selectedService.price||0).toFixed(0)}</span>
-                </div>
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Customer *</div>
-                    <select style={{ ...inp, fontFamily:'inherit' }} value={newForm.customer_id} onChange={function(e){setNewForm(function(p){return{...p,customer_id:e.target.value}})}}>
-                      <option value="">Select customer...</option>
-                      {customers.map(function(c){return <option key={c.id} value={c.id}>{c.full_name} ({c.email})</option>})}
-                    </select>
+            {/* CREATE FORMS */}
+            {showCreateSvc && (
+              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.1)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1.25rem' }}>
+                {svcInnerTab==='services' && (
+                  <div>
+                    <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'1.25rem' }}>Create service</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
+                      <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Service name</div><input type="text" style={inp} placeholder="e.g. 60-Min Private Tennis Lesson" value={newSvc.name} onChange={function(e){setNewSvc(function(p){return{...p,name:e.target.value}})}}/></div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Price ($)</div><input type="number" style={inp} value={newSvc.price} onChange={function(e){setNewSvc(function(p){return{...p,price:e.target.value}})}} placeholder="80"/></div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Category</div>
+                        <select style={{ ...inp, fontFamily:'inherit' }} value={newSvc.category_id} onChange={function(e){setNewSvc(function(p){return{...p,category_id:e.target.value}})}}>
+                          <option value="">No category</option>
+                          {categories.map(function(c){return <option key={c.id} value={c.id}>{c.name}</option>})}
+                        </select>
+                      </div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'6px' }}>Duration</div>
+                        <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
+                          {[30,45,60,75,90,120].map(function(d){ var active=newSvc.duration_mins===d; return <button key={d} onClick={function(){setNewSvc(function(p){return{...p,duration_mins:d}})}} style={{ padding:'5px 10px', borderRadius:'6px', border:'0.5px solid '+(active?'#534AB7':'rgba(0,0,0,0.15)'), background:active?'#EEEDFE':'transparent', fontSize:'12px', cursor:'pointer', fontFamily:'inherit', color:active?'#534AB7':'#666', fontWeight:active?600:400 }}>{d}m</button>})}
+                        </div>
+                      </div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Booking mode</div>
+                        <select style={{ ...inp, fontFamily:'inherit' }} value={newSvc.booking_mode} onChange={function(e){setNewSvc(function(p){return{...p,booking_mode:e.target.value}})}}>
+                          <option value="instant">Instant book</option><option value="request">Request (requires approval)</option>
+                        </select>
+                      </div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Visibility</div>
+                        <select style={{ ...inp, fontFamily:'inherit' }} value={newSvc.visibility} onChange={function(e){setNewSvc(function(p){return{...p,visibility:e.target.value}})}}>
+                          <option value="public">Public</option><option value="private">Private (link only)</option><option value="staff_only">Staff only</option>
+                        </select>
+                      </div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Payment mode</div>
+                        <select style={{ ...inp, fontFamily:'inherit' }} value={newSvc.payment_mode} onChange={function(e){setNewSvc(function(p){return{...p,payment_mode:e.target.value}})}}>
+                          <option value="full">Pay full price</option><option value="deposit">Pay deposit</option><option value="card_on_file">Card on file</option><option value="free">Free</option>
+                        </select>
+                      </div>
+                      <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Description</div><textarea style={{ ...inp, resize:'none', height:'70px' }} value={newSvc.description} onChange={function(e){setNewSvc(function(p){return{...p,description:e.target.value}})}} placeholder="Describe this service..."/></div>
+                    </div>
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      <button style={btn} onClick={function(){setShowCreateSvc(false)}}>Cancel</button>
+                      <button style={{ ...btnGold, background:'#534AB7', borderColor:'#534AB7' }} onClick={async function(){
+                        if (!newSvc.name.trim()) return
+                        setSvcSaving(true)
+                        await supabase.from('services').insert({ ...newSvc, duration_mins:parseInt(newSvc.duration_mins), price:parseFloat(newSvc.price)||0, is_active:true })
+                        setSvcSaving(false); setShowCreateSvc(false)
+                        setNewSvc({ name:'', description:'', category_id:'', duration_mins:60, price:'', payment_mode:'full', visibility:'public', booking_mode:'instant' })
+                        loadAll()
+                      }} disabled={svcSaving}>{svcSaving?'Saving...':'Save service'}</button>
+                    </div>
                   </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Coach</div>
-                    <select style={{ ...inp, fontFamily:'inherit' }} value={newForm.coach_id} onChange={function(e){setNewForm(function(p){return{...p,coach_id:e.target.value}})}}>
-                      <option value="">Any coach</option>
-                      {coaches.map(function(c){return <option key={c.id} value={c.id}>{c.full_name}</option>})}
-                    </select>
+                )}
+                {svcInnerTab==='categories' && (
+                  <div>
+                    <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'1rem' }}>Add category</div>
+                    <div style={{ marginBottom:'12px' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Category name</div><input type="text" style={inp} value={newCat} onChange={function(e){setNewCat(e.target.value)}} placeholder="e.g. Private Lessons"/></div>
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      <button style={btn} onClick={function(){setShowCreateSvc(false)}}>Cancel</button>
+                      <button style={{ ...btnGold, background:'#534AB7', borderColor:'#534AB7' }} onClick={async function(){
+                        if (!newCat.trim()) return
+                        await supabase.from('service_categories').insert({ name:newCat.trim(), display_order:categories.length })
+                        setNewCat(''); setShowCreateSvc(false); loadAll()
+                      }}>Save category</button>
+                    </div>
                   </div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Date & time *</div><input type="datetime-local" style={inp} value={newForm.starts_at} onChange={function(e){setNewForm(function(p){return{...p,starts_at:e.target.value}})}}/></div>
-                  <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Amount ($)</div><input type="number" style={inp} value={newForm.total_amount||selectedService.price} onChange={function(e){setNewForm(function(p){return{...p,total_amount:e.target.value}})}}/></div>
-                  <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Notes</div><textarea style={{ ...inp, resize:'none', height:'60px' }} value={newForm.notes} onChange={function(e){setNewForm(function(p){return{...p,notes:e.target.value}})}}/></div>
-                </div>
-                <div style={{ display:'flex', gap:'8px' }}>
-                  <button style={btn} onClick={function(){setShowNew(false);setSelectedService(null)}}>Cancel</button>
-                  <button style={btnGold} onClick={bookAppointment} disabled={saving||!newForm.customer_id||!newForm.starts_at}>{saving?'Booking...':'Confirm booking'}</button>
-                </div>
+                )}
+                {svcInnerTab==='addons' && (
+                  <div>
+                    <div style={{ fontSize:'15px', fontWeight:600, marginBottom:'1rem' }}>Add add-on</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
+                      <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Add-on name</div><input type="text" style={inp} value={newAddon.name} onChange={function(e){setNewAddon(function(p){return{...p,name:e.target.value}})}} placeholder="e.g. Video Analysis"/></div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Price ($)</div><input type="number" style={inp} value={newAddon.price} onChange={function(e){setNewAddon(function(p){return{...p,price:e.target.value}})}} placeholder="20"/></div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Max quantity</div><input type="number" style={inp} value={newAddon.max_qty} onChange={function(e){setNewAddon(function(p){return{...p,max_qty:e.target.value}})}} placeholder="1"/></div>
+                    </div>
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      <button style={btn} onClick={function(){setShowCreateSvc(false)}}>Cancel</button>
+                      <button style={{ ...btnGold, background:'#534AB7', borderColor:'#534AB7' }} onClick={async function(){
+                        setSvcSaving(true)
+                        await supabase.from('addons').insert({ ...newAddon, price:parseFloat(newAddon.price)||0, duration_added_mins:parseInt(newAddon.duration_added_mins)||0, max_qty:parseInt(newAddon.max_qty)||1, is_active:true })
+                        setSvcSaving(false); setShowCreateSvc(false)
+                        setNewAddon({ name:'', price:'', duration_added_mins:0, max_qty:1 }); loadAll()
+                      }} disabled={svcSaving}>{svcSaving?'Saving...':'Save add-on'}</button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
-            {!showNew && categories.map(function(cat){
-              var catSvcs = services.filter(function(s){return (s.category||'Uncategorized')===cat})
-              return (
-                <div key={cat} style={{ marginBottom:'1.25rem' }}>
-                  <div style={{ fontSize:'11px', fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' }}>{cat}</div>
-                  <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:'10px' }}>
-                    {catSvcs.map(function(svc){
-                      var modeColor = svc.booking_mode==='request'?['#FAEEDA','#854F0B']:['#E1F5EE','#0F6E56']
-                      return (
-                        <div key={svc.id} onClick={function(){setSelectedService(svc);setShowNew(true);setNewForm({ customer_id:'', coach_id:'', starts_at:'', notes:'', total_amount:svc.price||'' })}}
-                          style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem', cursor:'pointer', display:'flex', gap:'12px', alignItems:'flex-start' }}>
-                          <div style={{ width:'10px', height:'10px', borderRadius:'50%', background:svc.color||'#534AB7', flexShrink:0, marginTop:'4px' }}></div>
-                          <div style={{ flex:1 }}>
-                            <div style={{ fontSize:'14px', fontWeight:600, marginBottom:'5px' }}>{svc.name}</div>
-                            <div style={{ fontSize:'12px', color:'#888', display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'6px' }}>
-                              <span>⏱ {svc.duration_mins}min</span>
-                              <span style={{ color:'#1D9E75', fontWeight:600 }}>${parseFloat(svc.price||0).toFixed(0)}</span>
-                              <span style={{ display:'inline-block', padding:'1px 7px', borderRadius:'5px', fontSize:'11px', background:modeColor[0], color:modeColor[1], fontWeight:500 }}>{svc.booking_mode||'instant'}</span>
-                            </div>
-                            {svc.description&&<div style={{ fontSize:'12px', color:'#aaa' }}>{svc.description.substring(0,80)}{svc.description.length>80?'...':''}</div>}
-                          </div>
-                          <div style={{ fontSize:'18px', color:'#D4A843' }}>→</div>
+            {/* BOOK TAB — click service to book */}
+            {svcInnerTab==='book' && (
+              <div>
+                {!showNew && <div style={{ background:'#E6F1FB', border:'0.5px solid #85B7EB', borderRadius:'10px', padding:'12px 16px', marginBottom:'1.25rem', fontSize:'13px', color:'#185FA5', display:'flex', gap:'10px', alignItems:'center' }}>
+                  <span>💡</span><span>Select a service below to start booking an appointment.</span>
+                </div>}
+                {showNew && selectedService && (
+                  <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.5rem', marginBottom:'1.25rem' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'1.25rem' }}>
+                      <button style={{ ...btn, fontSize:'12px', padding:'4px 10px' }} onClick={function(){setShowNew(false);setSelectedService(null)}}>← Back</button>
+                      <div style={{ fontSize:'15px', fontWeight:600 }}>Book: {selectedService.name}</div>
+                      <span style={{ fontSize:'13px', color:'#1D9E75', fontWeight:600 }}>${parseFloat(selectedService.price||0).toFixed(0)}</span>
+                    </div>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'12px' }}>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Customer *</div>
+                        <select style={{ ...inp, fontFamily:'inherit' }} value={newForm.customer_id} onChange={function(e){setNewForm(function(p){return{...p,customer_id:e.target.value}})}}>
+                          <option value="">Select customer...</option>
+                          {customers.map(function(c){return <option key={c.id} value={c.id}>{c.full_name} ({c.email})</option>})}
+                        </select>
+                      </div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Coach</div>
+                        <select style={{ ...inp, fontFamily:'inherit' }} value={newForm.coach_id} onChange={function(e){setNewForm(function(p){return{...p,coach_id:e.target.value}})}}>
+                          <option value="">Any coach</option>
+                          {coaches.map(function(c){return <option key={c.id} value={c.id}>{c.full_name}</option>})}
+                        </select>
+                      </div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Date & time *</div><input type="datetime-local" style={inp} value={newForm.starts_at} onChange={function(e){setNewForm(function(p){return{...p,starts_at:e.target.value}})}}/></div>
+                      <div><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Amount ($)</div><input type="number" style={inp} value={newForm.total_amount||selectedService.price} onChange={function(e){setNewForm(function(p){return{...p,total_amount:e.target.value}})}}/></div>
+                      <div style={{ gridColumn:'span 2' }}><div style={{ fontSize:'12px', color:'#666', marginBottom:'4px' }}>Notes</div><textarea style={{ ...inp, resize:'none', height:'60px' }} value={newForm.notes} onChange={function(e){setNewForm(function(p){return{...p,notes:e.target.value}})}}/></div>
+                    </div>
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      <button style={btn} onClick={function(){setShowNew(false);setSelectedService(null)}}>Cancel</button>
+                      <button style={btnGold} onClick={bookAppointment} disabled={saving||!newForm.customer_id||!newForm.starts_at}>{saving?'Booking...':'Confirm booking'}</button>
+                    </div>
+                  </div>
+                )}
+                {!showNew && services.length===0 && <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'3rem', textAlign:'center', color:'#888' }}>No services yet. Go to "Manage services" tab to add one.</div>}
+                {!showNew && (function(){
+                  var grouped = {}
+                  services.forEach(function(s){ var cat = s.service_categories?.name||'Other'; if(!grouped[cat]) grouped[cat]=[]; grouped[cat].push(s) })
+                  return Object.keys(grouped).map(function(cat){
+                    return (
+                      <div key={cat} style={{ marginBottom:'1.25rem' }}>
+                        <div style={{ fontSize:'11px', fontWeight:700, color:'#888', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:'8px' }}>{cat}</div>
+                        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:'10px' }}>
+                          {grouped[cat].map(function(svc){
+                            var modeColor = svc.booking_mode==='request'?['#FAEEDA','#854F0B']:['#E1F5EE','#0F6E56']
+                            return (
+                              <div key={svc.id} onClick={function(){setSelectedService(svc);setShowNew(true);setNewForm({ customer_id:'', coach_id:'', starts_at:'', notes:'', total_amount:svc.price||'' })}}
+                                style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'1.25rem', cursor:'pointer', display:'flex', gap:'12px', alignItems:'flex-start' }}>
+                                <div style={{ width:'10px', height:'10px', borderRadius:'50%', background:svc.color||'#534AB7', flexShrink:0, marginTop:'4px' }}></div>
+                                <div style={{ flex:1 }}>
+                                  <div style={{ fontSize:'14px', fontWeight:600, marginBottom:'5px' }}>{svc.name}</div>
+                                  <div style={{ fontSize:'12px', color:'#888', display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'6px' }}>
+                                    <span>⏱ {svc.duration_mins}min</span>
+                                    <span style={{ color:'#1D9E75', fontWeight:600 }}>${parseFloat(svc.price||0).toFixed(0)}</span>
+                                    <span style={{ display:'inline-block', padding:'1px 7px', borderRadius:'5px', fontSize:'11px', background:modeColor[0], color:modeColor[1], fontWeight:500 }}>{svc.booking_mode||'instant'}</span>
+                                  </div>
+                                  {svc.description&&<div style={{ fontSize:'12px', color:'#aaa' }}>{svc.description.substring(0,80)}{svc.description.length>80?'...':''}</div>}
+                                </div>
+                                <div style={{ fontSize:'18px', color:'#D4A843' }}>→</div>
+                              </div>
+                            )
+                          })}
                         </div>
-                      )
-                    })}
+                      </div>
+                    )
+                  })
+                })()}
+              </div>
+            )}
+
+            {/* MANAGE SERVICES TAB */}
+            {svcInnerTab==='services' && (
+              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 14px', borderBottom:'0.5px solid rgba(0,0,0,0.06)' }}>
+                  <div style={{ position:'relative', width:'260px' }}>
+                    <span style={{ position:'absolute', left:'10px', top:'50%', transform:'translateY(-50%)', color:'#999' }}>⌕</span>
+                    <input type="text" style={{ ...inp, paddingLeft:'32px', borderRadius:'20px' }} placeholder="Search services..." value={svcSearch} onChange={function(e){setSvcSearch(e.target.value)}} />
                   </div>
                 </div>
-              )
-            })}
-            {services.length===0&&!loading&&<div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', padding:'3rem', textAlign:'center', color:'#888' }}>No services. <a href="/admin/services" style={{ color:'#D4A843' }}>Create services →</a></div>}
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
+                  <thead><tr style={{ background:'#f9f9f7' }}>
+                    {['Name','Price','Duration','Category','Booking',''].map(function(h,i){return <th key={i} style={{ padding:'10px 14px', textAlign:'left', fontWeight:500, fontSize:'12px', color:'#888', borderBottom:'0.5px solid rgba(0,0,0,0.06)' }}>{h}</th>})}
+                  </tr></thead>
+                  <tbody>
+                    {loading && <tr><td colSpan="6" style={{ padding:'2rem', textAlign:'center', color:'#999' }}>Loading...</td></tr>}
+                    {!loading && services.filter(function(s){return !svcSearch||s.name.toLowerCase().includes(svcSearch.toLowerCase())}).length===0 && <tr><td colSpan="6" style={{ padding:'2rem', textAlign:'center', color:'#999' }}>No services yet. Click "+ Add service" above.</td></tr>}
+                    {services.filter(function(s){return !svcSearch||s.name.toLowerCase().includes(svcSearch.toLowerCase())}).map(function(s,i){
+                      return (
+                        <tr key={s.id} style={{ borderBottom:'0.5px solid rgba(0,0,0,0.05)' }}>
+                          <td style={{ padding:'12px 14px' }}><div style={{ fontWeight:500 }}>{s.name}</div><div style={{ fontSize:'11px', color:'#888', marginTop:'2px', maxWidth:'300px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.description}</div></td>
+                          <td style={{ padding:'12px 14px', color:'#666' }}>${parseFloat(s.price||0).toFixed(2)}</td>
+                          <td style={{ padding:'12px 14px', color:'#666' }}>{s.duration_mins}min</td>
+                          <td style={{ padding:'12px 14px', color:'#666' }}>{s.service_categories?.name||'—'}</td>
+                          <td style={{ padding:'12px 14px' }}><span style={{ display:'inline-block', padding:'2px 8px', borderRadius:'6px', fontSize:'11px', background:s.booking_mode==='request'?'#FAEEDA':'#E1F5EE', color:s.booking_mode==='request'?'#854F0B':'#0F6E56', fontWeight:500 }}>{s.booking_mode}</span></td>
+                          <td style={{ padding:'12px 14px' }}><button style={{ ...btn, padding:'4px 10px', fontSize:'12px', color:'#A32D2D' }} onClick={async function(){if(confirm('Delete this service?')){await supabase.from('services').update({is_active:false}).eq('id',s.id);loadAll()}}}>Delete</button></td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* CATEGORIES TAB */}
+            {svcInnerTab==='categories' && (
+              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
+                  <thead><tr style={{ background:'#f9f9f7' }}><th style={{ padding:'10px 14px', textAlign:'left', fontWeight:500, fontSize:'12px', color:'#888', borderBottom:'0.5px solid rgba(0,0,0,0.06)' }}>Name</th><th style={{ width:'80px', borderBottom:'0.5px solid rgba(0,0,0,0.06)' }}></th></tr></thead>
+                  <tbody>
+                    {categories.map(function(c,i){return <tr key={c.id} style={{ borderBottom:i<categories.length-1?'0.5px solid rgba(0,0,0,0.05)':'none' }}><td style={{ padding:'12px 14px', fontWeight:500 }}>🗂 {c.name}</td><td style={{ padding:'12px 14px' }}><button style={{ ...btn, padding:'4px 10px', fontSize:'12px', color:'#A32D2D' }} onClick={async function(){if(confirm('Delete category?')){await supabase.from('service_categories').delete().eq('id',c.id);loadAll()}}}>Delete</button></td></tr>})}
+                    {!loading && categories.length===0 && <tr><td colSpan="2" style={{ padding:'2rem', textAlign:'center', color:'#999' }}>No categories yet</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* ADD-ONS TAB */}
+            {svcInnerTab==='addons' && (
+              <div style={{ background:'#fff', border:'0.5px solid rgba(0,0,0,0.08)', borderRadius:'12px', overflow:'hidden' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'13px' }}>
+                  <thead><tr style={{ background:'#f9f9f7' }}>
+                    {['Name','Price','Max qty',''].map(function(h,i){return <th key={i} style={{ padding:'10px 14px', textAlign:'left', fontWeight:500, fontSize:'12px', color:'#888', borderBottom:'0.5px solid rgba(0,0,0,0.06)' }}>{h}</th>})}
+                  </tr></thead>
+                  <tbody>
+                    {addons.map(function(a,i){return <tr key={a.id} style={{ borderBottom:i<addons.length-1?'0.5px solid rgba(0,0,0,0.05)':'none' }}><td style={{ padding:'12px 14px', fontWeight:500 }}>{a.name}</td><td style={{ padding:'12px 14px', color:'#666' }}>${parseFloat(a.price||0).toFixed(2)}</td><td style={{ padding:'12px 14px', color:'#666' }}>{a.max_qty}</td><td style={{ padding:'12px 14px' }}><button style={{ ...btn, padding:'4px 10px', fontSize:'12px', color:'#A32D2D' }} onClick={async function(){if(confirm('Delete add-on?')){await supabase.from('addons').update({is_active:false}).eq('id',a.id);loadAll()}}}>Delete</button></td></tr>})}
+                    {!loading && addons.length===0 && <tr><td colSpan="4" style={{ padding:'2rem', textAlign:'center', color:'#999' }}>No add-ons yet</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
